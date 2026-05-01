@@ -3,6 +3,7 @@ import type {
   ApiResponse,
   PlanRecord,
   PlanPayload,
+  PlanSubscriberRecord,
   UserSubscriptionRecord,
   CreateUserSubscriptionRequest,
   SubscriptionPayResponse,
@@ -49,6 +50,13 @@ export async function patchPlanStatus(
 
 export async function deletePlan(id: number): Promise<ApiResponse> {
   const res = await api.delete(`/api/subscription/admin/plans/${id}`)
+  return res.data
+}
+
+export async function getPlanSubscribers(
+  planId: number
+): Promise<ApiResponse<PlanSubscriberRecord[]>> {
+  const res = await api.get(`/api/subscription/admin/plans/${planId}/subscribers`)
   return res.data
 }
 

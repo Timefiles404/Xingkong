@@ -50,6 +50,11 @@ func GetUserAutoGroup(userGroup string) []string {
 			autoGroups = append(autoGroups, group)
 		}
 	}
+	if len(autoGroups) == 0 {
+		if _, ok := groups["default"]; ok {
+			autoGroups = append(autoGroups, "default")
+		}
+	}
 	return autoGroups
 }
 

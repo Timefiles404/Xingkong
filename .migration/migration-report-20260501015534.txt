@@ -1,0 +1,30 @@
+Imported rows from source CSV: 488
+
+Local users after migration:
+488
+
+Sample users:
+ id |     username     |   display_name   | role |  quota   
+----+------------------+------------------+------+----------
+  1 | xingkongai       | Root User        |  100 | 66809913
+  3 | admin            | admin            |    1 | 98433379
+  4 | ytytysxrrtr      | ytytysxrrtr      |    1 |    10470
+  5 | 16603743398      | 16603743398      |    1 |    20000
+  6 | susu234          | susu234          |    1 | 65272860
+  8 | test1            | test1            |    1 |  8486382
+  9 | pamlyyybz        | pamlyyybz        |    1 |   233869
+ 10 | adxz             | adxz             |    1 |    18281
+ 11 | 584644116@qq.com | 584644116@qq.com |    1 |    20000
+ 12 | chengmeng        | chengmeng        |    1 |  1477426
+ 13 | jklongchen       | jklongchen       |    1 |    20000
+ 14 | 1613416063       | 1613416063       |    1 | 11023641
+ 15 | root             | root             |    1 |    40000
+ 16 | mikuna           | mikuna           |    1 |    40000
+ 17 | 这位同学         | 这位同学         |    1 |    20574
+ 18 | syhx             | syhx             |    1 | 30267617
+ 19 | nansongkuzi      | nansongkuzi      |    1 |      120
+ 20 | asanouraki       | asanouraki       |    1 |    60000
+ 21 | jijibao          | jijibao          |    1 |    40000
+ 22 | 996636269@qq.com | 996636269@qq.com |    1 |    60000
+(20 rows)
+

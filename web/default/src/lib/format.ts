@@ -36,6 +36,19 @@ export function formatCurrencyUSD(value: number | null | undefined): string {
   return formatCurrencyFromUSD(value == null ? null : (value as number))
 }
 
+export function formatCNYAmount(
+  value: number | null | undefined,
+  digits = 4
+): string {
+  if (value == null || Number.isNaN(value as number)) return '-'
+  return new Intl.NumberFormat('zh-CN', {
+    style: 'currency',
+    currency: 'CNY',
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  }).format(value as number)
+}
+
 // ============================================================================
 // Quota Formatting (500,000 units = $1)
 // ============================================================================

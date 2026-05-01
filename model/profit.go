@@ -273,6 +273,12 @@ type ProfitUsageInput struct {
 	DownstreamGroupSpecialRatioSnapshot float64
 }
 
+type UsageSettlementAuditSummary struct {
+	RealizedRevenueCNY    float64 `json:"realized_revenue_cny"`
+	UpstreamCostCNY       float64 `json:"upstream_cost_cny"`
+	RequestGrossProfitCNY float64 `json:"request_gross_profit_cny"`
+}
+
 type ProfitSummarySnapshot struct {
 	OperatingProfitCNY float64 `json:"operating_profit_cny"`
 	GrossProfitCNY     float64 `json:"gross_profit_cny"`
@@ -331,12 +337,6 @@ const defaultProfitUSDPerCNY = 1.0 / 7.2
 func normalizeUSDPerCNYRate(raw float64) float64 {
 	if raw <= 0 {
 		return defaultProfitUSDPerCNY
-	}
-	// Compatibility:
-	// old values were stored as CNY per USD (for example 7.2);
-	// new values are stored as USD per CNY (for example 0.1389).
-	if raw > 1 {
-		return 1 / raw
 	}
 	return raw
 }
@@ -780,12 +780,18 @@ func SyncWalletLotsToUserQuotaTx(tx *gorm.DB, userId int, targetQuota int64, sou
 }
 
 func RecordUsageSettlement(input ProfitUsageInput) error {
+	_, err := RecordUsageSettlementWithSummary(input)
+	return err
+}
+
+func RecordUsageSettlementWithSummary(input ProfitUsageInput) (*UsageSettlementAuditSummary, error) {
 	if input.UserId <= 0 || input.QuotaUsed <= 0 {
-		return nil
+		return nil, nil
 	}
-	return DB.Transaction(func(tx *gorm.DB) error {
+	summary := &UsageSettlementAuditSummary{}
+	err := DB.Transaction(func(tx *gorm.DB) error {
 		if isProfitExemptUserTx(tx, input.UserId) {
-			return recordAdminExpenseUsageSettlementTx(tx, input)
+			return recordAdminExpenseUsageSettlementTx(tx, input, summary)
 		}
 		var existing int64
 		if err := tx.Model(&UsageSettlement{}).
@@ -810,11 +816,15 @@ func RecordUsageSettlement(input ProfitUsageInput) error {
 
 		switch input.SourceType {
 		case ProfitLotTypeSubscription:
-			return consumeSubscriptionLotForUsageTx(tx, input, downstream, upstreamRate, upstreamPricing, upstreamCostUSD, upstreamCostCNY, upstreamPrompt, upstreamCompletion, upstreamCache)
+			return consumeSubscriptionLotForUsageTx(tx, input, downstream, upstreamRate, upstreamPricing, upstreamCostUSD, upstreamCostCNY, upstreamPrompt, upstreamCompletion, upstreamCache, summary)
 		default:
-			return consumeWalletLotsForUsageTx(tx, input, downstream, upstreamRate, upstreamPricing, upstreamCostUSD, upstreamCostCNY, upstreamPrompt, upstreamCompletion, upstreamCache)
+			return consumeWalletLotsForUsageTx(tx, input, downstream, upstreamRate, upstreamPricing, upstreamCostUSD, upstreamCostCNY, upstreamPrompt, upstreamCompletion, upstreamCache, summary)
 		}
 	})
+	if err != nil {
+		return nil, err
+	}
+	return summary, nil
 }
 
 func isProfitExemptUserTx(tx *gorm.DB, userId int) bool {
@@ -835,7 +845,7 @@ func nonAdminUserIdsSubquery(tx *gorm.DB) *gorm.DB {
 	return tx.Model(&User{}).Select("id").Where("role < ?", common.RoleAdminUser)
 }
 
-func recordAdminExpenseUsageSettlementTx(tx *gorm.DB, input ProfitUsageInput) error {
+func recordAdminExpenseUsageSettlementTx(tx *gorm.DB, input ProfitUsageInput, summary *UsageSettlementAuditSummary) error {
 	var existing int64
 	if err := tx.Model(&UsageSettlement{}).
 		Where("request_id = ? AND source_lot_type = ?", strings.TrimSpace(input.RequestId), ProfitLotTypeAdmin).
@@ -902,10 +912,18 @@ func recordAdminExpenseUsageSettlementTx(tx *gorm.DB, input ProfitUsageInput) er
 		UpstreamCompletionPriceUSDPer1M:     upstreamCompletionPrice,
 		UpstreamCachePriceUSDPer1M:          upstreamCachePrice,
 	}
-	return tx.Create(settlement).Error
+	if err := tx.Create(settlement).Error; err != nil {
+		return err
+	}
+	if summary != nil {
+		summary.RealizedRevenueCNY = settlement.RealizedRevenueCNY
+		summary.UpstreamCostCNY = settlement.UpstreamCostCNY
+		summary.RequestGrossProfitCNY = settlement.RequestGrossProfitCNY
+	}
+	return nil
 }
 
-func consumeWalletLotsForUsageTx(tx *gorm.DB, input ProfitUsageInput, downstreamRate float64, upstreamRate float64, upstreamPricing *profitPricingConfig, upstreamCostUSD float64, upstreamCostCNY float64, upstreamPrompt float64, upstreamCompletion float64, upstreamCache float64) error {
+func consumeWalletLotsForUsageTx(tx *gorm.DB, input ProfitUsageInput, downstreamRate float64, upstreamRate float64, upstreamPricing *profitPricingConfig, upstreamCostUSD float64, upstreamCostCNY float64, upstreamPrompt float64, upstreamCompletion float64, upstreamCache float64, summary *UsageSettlementAuditSummary) error {
 	paidLots, giftLots, err := getSpendableWalletLotsTx(tx, input.UserId)
 	if err != nil {
 		return err
@@ -1011,11 +1029,16 @@ func consumeWalletLotsForUsageTx(tx *gorm.DB, input ProfitUsageInput, downstream
 		if err := tx.Create(settlement).Error; err != nil {
 			return err
 		}
+		if summary != nil {
+			summary.RealizedRevenueCNY += settlement.RealizedRevenueCNY
+			summary.UpstreamCostCNY += settlement.UpstreamCostCNY
+			summary.RequestGrossProfitCNY += settlement.RequestGrossProfitCNY
+		}
 	}
 	return nil
 }
 
-func consumeSubscriptionLotForUsageTx(tx *gorm.DB, input ProfitUsageInput, downstreamRate float64, upstreamRate float64, upstreamPricing *profitPricingConfig, upstreamCostUSD float64, upstreamCostCNY float64, upstreamPrompt float64, upstreamCompletion float64, upstreamCache float64) error {
+func consumeSubscriptionLotForUsageTx(tx *gorm.DB, input ProfitUsageInput, downstreamRate float64, upstreamRate float64, upstreamPricing *profitPricingConfig, upstreamCostUSD float64, upstreamCostCNY float64, upstreamPrompt float64, upstreamCompletion float64, upstreamCache float64, summary *UsageSettlementAuditSummary) error {
 	if input.SubscriptionId <= 0 {
 		return nil
 	}
@@ -1086,7 +1109,15 @@ func consumeSubscriptionLotForUsageTx(tx *gorm.DB, input ProfitUsageInput, downs
 		UpstreamCompletionPriceUSDPer1M:     upstreamCompletionPrice,
 		UpstreamCachePriceUSDPer1M:          upstreamCachePrice,
 	}
-	return tx.Create(settlement).Error
+	if err := tx.Create(settlement).Error; err != nil {
+		return err
+	}
+	if summary != nil {
+		summary.RealizedRevenueCNY = settlement.RealizedRevenueCNY
+		summary.UpstreamCostCNY = settlement.UpstreamCostCNY
+		summary.RequestGrossProfitCNY = settlement.RequestGrossProfitCNY
+	}
+	return nil
 }
 
 func getSpendableWalletLotsTx(tx *gorm.DB, userId int) ([]*WalletLot, []*WalletLot, error) {
@@ -1182,19 +1213,33 @@ func parseProfitUpstreamRate(raw string) float64 {
 	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
 		return 0
 	}
-	value, ok := parsed["profit_upstream_usd_per_cny"]
-	if !ok {
-		value, ok = parsed["profit_upstream_cny_per_usd"]
-		if !ok {
+	if value, ok := parsed["profit_upstream_usd_per_cny"]; ok {
+		switch typed := value.(type) {
+		case float64:
+			return normalizeUSDPerCNYRate(typed)
+		case string:
+			v, _ := strconv.ParseFloat(typed, 64)
+			return normalizeUSDPerCNYRate(v)
+		default:
 			return 0
 		}
 	}
+	value, ok := parsed["profit_upstream_cny_per_usd"]
+	if !ok {
+		return 0
+	}
 	switch typed := value.(type) {
 	case float64:
-		return normalizeUSDPerCNYRate(typed)
+		if typed <= 0 {
+			return 0
+		}
+		return 1 / typed
 	case string:
 		v, _ := strconv.ParseFloat(typed, 64)
-		return normalizeUSDPerCNYRate(v)
+		if v <= 0 {
+			return 0
+		}
+		return 1 / v
 	default:
 		return 0
 	}
@@ -1237,7 +1282,7 @@ func effectiveDownstreamPricesFromInput(input ProfitUsageInput, downstreamRate f
 		if groupRatio <= 0 {
 			groupRatio = 1
 		}
-		base := input.DownstreamModelRatioSnapshot * groupRatio
+		base := input.DownstreamModelRatioSnapshot * 2 * groupRatio
 		completion := base * defaultSnapshotRatio(input.DownstreamCompletionRatioSnapshot, 1)
 		cache := base * defaultSnapshotRatio(input.DownstreamCacheRatioSnapshot, 0)
 		return base, completion, cache

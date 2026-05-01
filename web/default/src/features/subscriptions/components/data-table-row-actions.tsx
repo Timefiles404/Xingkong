@@ -22,7 +22,11 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant='ghost' className='h-8 w-8 p-0'>
+        <Button
+          variant='ghost'
+          className='h-8 w-8 p-0'
+          onClick={(event) => event.stopPropagation()}
+        >
           <MoreHorizontal className='h-4 w-4' />
         </Button>
       </DropdownMenuTrigger>

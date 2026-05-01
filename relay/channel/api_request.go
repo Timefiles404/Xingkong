@@ -486,13 +486,12 @@ func DoRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http.Response, error) {
 	var client *http.Client
 	var err error
-	if info.ChannelSetting.Proxy != "" {
-		client, err = service.NewProxyHttpClient(info.ChannelSetting.Proxy)
-		if err != nil {
+	client, err = service.GetHttpClientWithChannelOptions(info.ChannelSetting.Proxy, info.ChannelSetting.SkipTLSVerify)
+	if err != nil {
+		if info.ChannelSetting.Proxy != "" {
 			return nil, fmt.Errorf("new proxy http client failed: %w", err)
 		}
-	} else {
-		client = service.GetHttpClient()
+		return nil, fmt.Errorf("new http client failed: %w", err)
 	}
 
 	var stopPinger context.CancelFunc
@@ -518,7 +517,7 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	resp, err := client.Do(req)
 	if err != nil {
 		logger.LogError(c, "do request failed: "+err.Error())
-		return nil, types.NewError(err, types.ErrorCodeDoRequestFailed, types.ErrOptionWithHideErrMsg("upstream error: do request failed"))
+		return nil, types.NewError(err, types.ErrorCodeDoRequestFailed)
 	}
 	if resp == nil {
 		return nil, errors.New("resp is nil")

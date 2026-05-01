@@ -129,6 +129,11 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 
 	usage, newAPIError := adaptor.DoResponse(c, httpResp, info)
 	if newAPIError != nil {
+		if usageDto, ok := usage.(*dto.Usage); ok {
+			service.MarkRelayErrorBillable(c, "text", usageDto)
+		} else {
+			service.MarkRelayErrorBillable(c, "text", nil)
+		}
 		// reset status code 重置状态码
 		service.ResetStatusCode(newAPIError, statusCodeMappingStr)
 		return newAPIError

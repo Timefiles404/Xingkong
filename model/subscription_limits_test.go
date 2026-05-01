@@ -59,6 +59,48 @@ func TestRefundSubscriptionPreConsume_ReleasesRollingLimit(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestPreConsumeUserSubscription_RespectsModelLimits(t *testing.T) {
+	truncateTables(t)
+
+	insertActiveSubscriptionForLimitTest(t, &UserSubscription{
+		Id:                 9003,
+		UserId:             103,
+		PlanId:             1,
+		AmountTotal:        1000,
+		ModelLimitsEnabled: true,
+		ModelLimits:        "gpt-4.1",
+	})
+
+	_, err := PreConsumeUserSubscription("sub-model-limit-req-1", 103, "gpt-5.4", 0, 60)
+	require.Error(t, err)
+
+	_, err = PreConsumeUserSubscription("sub-model-limit-req-2", 103, "gpt-4.1", 0, 60)
+	require.NoError(t, err)
+}
+
+func TestPreConsumeUserSubscription_SkipsIneligibleSubscriptionByModelLimits(t *testing.T) {
+	truncateTables(t)
+
+	insertActiveSubscriptionForLimitTest(t, &UserSubscription{
+		Id:                 9004,
+		UserId:             104,
+		PlanId:             1,
+		AmountTotal:        1000,
+		ModelLimitsEnabled: true,
+		ModelLimits:        "gpt-4.1",
+	})
+	insertActiveSubscriptionForLimitTest(t, &UserSubscription{
+		Id:          9005,
+		UserId:      104,
+		PlanId:      2,
+		AmountTotal: 1000,
+	})
+
+	res, err := PreConsumeUserSubscription("sub-model-limit-req-3", 104, "gpt-5.4", 0, 80)
+	require.NoError(t, err)
+	require.Equal(t, 9005, res.UserSubscriptionId)
+}
+
 func TestCalculateSubscriptionRefundQuota_BasedOnUnusedAmount(t *testing.T) {
 	sub := &UserSubscription{
 		PaidAmount: 800000,

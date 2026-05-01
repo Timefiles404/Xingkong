@@ -63,6 +63,11 @@ const (
 	// It is not returned to end users, but can be persisted into consume/error logs for debugging.
 	ContextKeyAdminRejectReason ContextKey = "admin_reject_reason"
 
+	// Relay error billing context: when an upstream request partially succeeded but the
+	// final request still failed, we keep enough info to settle once after retries end.
+	ContextKeyBillableRelayErrorMode  ContextKey = "billable_relay_error_mode"
+	ContextKeyBillableRelayErrorUsage ContextKey = "billable_relay_error_usage"
+
 	// ContextKeyLanguage stores the user's language preference for i18n
 	ContextKeyLanguage ContextKey = "language"
 	ContextKeyIsStream ContextKey = "is_stream"

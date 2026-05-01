@@ -772,6 +772,8 @@ export function ChannelMutateDrawer({
         type,
         key,
         base_url: form.getValues('base_url') || '',
+        proxy: form.getValues('proxy') || '',
+        skip_tls_verify: form.getValues('skip_tls_verify') === true,
       })
 
       if (response.success && response.data) {
@@ -3191,6 +3193,29 @@ export function ChannelMutateDrawer({
                             )}
                           </FormDescription>
                           <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name='skip_tls_verify'
+                      render={({ field }) => (
+                        <FormItem className='flex items-center justify-between'>
+                          <div className='space-y-0.5'>
+                            <FormLabel>{t('Skip TLS Verification')}</FormLabel>
+                            <FormDescription>
+                              {t(
+                                'Only enable this for upstreams with invalid/self-signed certificates or IP-based certificates without SAN.'
+                              )}
+                            </FormDescription>
+                          </div>
+                          <FormControl>
+                            <Switch
+                              checked={field.value}
+                              onCheckedChange={field.onChange}
+                            />
+                          </FormControl>
                         </FormItem>
                       )}
                     />

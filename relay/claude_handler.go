@@ -204,6 +204,11 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 	usage, newAPIError := adaptor.DoResponse(c, httpResp, info)
 	//log.Printf("usage: %v", usage)
 	if newAPIError != nil {
+		if usageDto, ok := usage.(*dto.Usage); ok {
+			service.MarkRelayErrorBillable(c, "text", usageDto)
+		} else {
+			service.MarkRelayErrorBillable(c, "text", nil)
+		}
 		// reset status code 重置状态码
 		service.ResetStatusCode(newAPIError, statusCodeMappingStr)
 		return newAPIError

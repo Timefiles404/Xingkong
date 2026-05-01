@@ -19,6 +19,7 @@ export function getPlanFormSchema(t: TFunction) {
     daily_amount: z.coerce.number().min(0),
     weekly_amount: z.coerce.number().min(0),
     upgrade_group: z.string().optional(),
+    model_limits: z.array(z.string()),
     stripe_price_id: z.string().optional(),
     creem_product_id: z.string().optional(),
   })
@@ -41,6 +42,7 @@ export const PLAN_FORM_DEFAULTS: PlanFormValues = {
   daily_amount: 0,
   weekly_amount: 0,
   upgrade_group: '',
+  model_limits: [],
   stripe_price_id: '',
   creem_product_id: '',
 }
@@ -73,6 +75,9 @@ export function planToFormValues(plan: SubscriptionPlan): PlanFormValues {
         ? quotaUnitsToDollars(Number(plan.weekly_amount || 0))
         : 0,
     upgrade_group: plan.upgrade_group || '',
+    model_limits: plan.model_limits
+      ? plan.model_limits.split(',').filter(Boolean)
+      : [],
     stripe_price_id: plan.stripe_price_id || '',
     creem_product_id: plan.creem_product_id || '',
   }
@@ -105,6 +110,8 @@ export function formValuesToPlanPayload(values: PlanFormValues): PlanPayload {
           ? parseQuotaFromDollars(Number(values.weekly_amount || 0))
           : 0,
       upgrade_group: values.upgrade_group || '',
+      model_limits_enabled: values.model_limits.length > 0,
+      model_limits: values.model_limits.join(','),
     },
   }
 }

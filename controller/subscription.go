@@ -17,6 +17,10 @@ type SubscriptionPlanDTO struct {
 	Plan model.SubscriptionPlan `json:"plan"`
 }
 
+type SubscriptionPlanMemberDTO struct {
+	Member model.SubscriptionPlanMemberSummary `json:"member"`
+}
+
 type BillingPreferenceRequest struct {
 	BillingPreference string `json:"billing_preference"`
 }
@@ -161,6 +165,24 @@ func AdminListSubscriptionPlans(c *gin.Context) {
 	common.ApiSuccess(c, result)
 }
 
+func AdminListSubscriptionPlanMembers(c *gin.Context) {
+	planId, _ := strconv.Atoi(c.Param("id"))
+	if planId <= 0 {
+		common.ApiErrorMsg(c, "无效的套餐ID")
+		return
+	}
+	members, err := model.ListSubscriptionPlanMembers(planId)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	result := make([]SubscriptionPlanMemberDTO, 0, len(members))
+	for _, member := range members {
+		result = append(result, SubscriptionPlanMemberDTO{Member: member})
+	}
+	common.ApiSuccess(c, result)
+}
+
 type AdminUpsertSubscriptionPlanRequest struct {
 	Plan model.SubscriptionPlan `json:"plan"`
 }
@@ -207,6 +229,7 @@ func AdminCreateSubscriptionPlan(c *gin.Context) {
 		return
 	}
 	req.Plan.UpgradeGroup = strings.TrimSpace(req.Plan.UpgradeGroup)
+	req.Plan.NormalizeModelLimits()
 	if req.Plan.UpgradeGroup != "" {
 		if _, ok := ratio_setting.GetGroupRatioCopy()[req.Plan.UpgradeGroup]; !ok {
 			common.ApiErrorMsg(c, "升级分组不存在")
@@ -269,6 +292,7 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 		return
 	}
 	req.Plan.UpgradeGroup = strings.TrimSpace(req.Plan.UpgradeGroup)
+	req.Plan.NormalizeModelLimits()
 	if req.Plan.UpgradeGroup != "" {
 		if _, ok := ratio_setting.GetGroupRatioCopy()[req.Plan.UpgradeGroup]; !ok {
 			common.ApiErrorMsg(c, "升级分组不存在")
@@ -296,6 +320,8 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 			"daily_amount":          req.Plan.DailyAmount,
 			"weekly_amount":         req.Plan.WeeklyAmount,
 			"upgrade_group":         req.Plan.UpgradeGroup,
+			"model_limits_enabled":  req.Plan.ModelLimitsEnabled,
+			"model_limits":          req.Plan.ModelLimits,
 			"updated_at":            common.GetTimestamp(),
 		}
 		if err := tx.Model(&model.SubscriptionPlan{}).Where("id = ?", id).Updates(updateMap).Error; err != nil {

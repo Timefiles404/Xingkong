@@ -1,0 +1,2 @@
+users_processed,users_with_paid_balance,expected_paid_quota,expected_free_quota,inserted_paid_quota,inserted_free_quota,inserted_paid_gross_cny
+489,267,1562769166,18032289,1562769166,18033240,1562.769166

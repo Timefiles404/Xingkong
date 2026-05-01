@@ -405,6 +405,9 @@ export function SubscriptionPlansCard(props: SubscriptionPlansCardProps) {
                     const isExpired = (subscription?.end_time || 0) < now
                     const isActive =
                       subscription?.status === 'active' && !isExpired
+                    const allowedModels = subscription?.model_limits
+                      ? subscription.model_limits.split(',').filter(Boolean)
+                      : []
 
                     return (
                       <div
@@ -458,6 +461,11 @@ export function SubscriptionPlansCard(props: SubscriptionPlansCardProps) {
                             (subscription?.end_time || 0) * 1000
                           ).toLocaleString()}
                         </div>
+                        {allowedModels.length > 0 && (
+                          <div className='text-muted-foreground mt-1'>
+                            {t('Available Models')}: {allowedModels.join(', ')}
+                          </div>
+                        )}
                         <div className='text-muted-foreground mt-1'>
                           {t('Included Balance')}:{' '}
                           {totalAmount > 0 ? (
@@ -529,6 +537,9 @@ export function SubscriptionPlansCard(props: SubscriptionPlansCardProps) {
                 const limit = Number(plan.max_purchase_per_user || 0)
                 const count = planPurchaseCountMap.get(plan.id) || 0
                 const reached = limit > 0 && count >= limit
+                const allowedModels = plan.model_limits
+                  ? plan.model_limits.split(',').filter(Boolean)
+                  : []
 
                 const benefits = [
                   `${t('Validity Period')}: ${formatDuration(plan, t)}`,
@@ -541,6 +552,9 @@ export function SubscriptionPlansCard(props: SubscriptionPlansCardProps) {
                   limit > 0 ? `${t('Purchase Limit')}: ${limit}` : null,
                   plan.upgrade_group
                     ? `${t('Upgrade Group')}: ${plan.upgrade_group}`
+                    : null,
+                  allowedModels.length > 0
+                    ? `${t('Available Models')}: ${allowedModels.join(', ')}`
                     : null,
                 ].filter(Boolean) as string[]
 

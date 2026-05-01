@@ -77,7 +77,7 @@ func calculateAudioQuota(info QuotaInfo) int {
 	quota = quota.Add(inputAudioTokens.Mul(audioRatio))
 	quota = quota.Add(outputAudioTokens.Mul(audioRatio).Mul(audioCompletionRatio))
 
-	quota = quota.Mul(ratio)
+	quota = quota.Mul(ratio).Mul(decimal.NewFromFloat(common.ModelRatioQuotaFactor()))
 
 	// If ratio is not zero and quota is less than or equal to zero, set quota to 1
 	if !ratio.IsZero() && quota.LessThanOrEqual(decimal.Zero) {
@@ -240,25 +240,11 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 	if tieredResult != nil {
 		InjectTieredBillingInfo(other, relayInfo, tieredResult)
 	}
-	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
-		ChannelId:        relayInfo.ChannelId,
-		PromptTokens:     usage.InputTokens,
-		CompletionTokens: usage.OutputTokens,
-		ModelName:        logModel,
-		TokenName:        tokenName,
-		Quota:            quota,
-		Content:          logContent,
-		TokenId:          relayInfo.TokenId,
-		UseTimeSeconds:   int(useTimeSeconds),
-		IsStream:         relayInfo.IsStream,
-		Group:            relayInfo.UsingGroup,
-		Other:            other,
-	})
 	settlementSource := model.ProfitLotTypeWallet
 	if relayInfo.BillingSource == BillingSourceSubscription {
 		settlementSource = model.ProfitLotTypeSubscription
 	}
-	if err := model.RecordUsageSettlement(model.ProfitUsageInput{
+	profitUsageInput := model.ProfitUsageInput{
 		RequestId:                           relayInfo.RequestId,
 		UserId:                              relayInfo.UserId,
 		SourceType:                          settlementSource,
@@ -276,19 +262,39 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 		DownstreamCacheWriteRatioSnapshot:   relayInfo.PriceData.CacheCreationRatio,
 		DownstreamGroupRatioSnapshot:        relayInfo.PriceData.GroupRatioInfo.GroupRatio,
 		DownstreamGroupSpecialRatioSnapshot: relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio,
-	}); err != nil {
-		logger.LogError(ctx, "error recording profit usage settlement: "+err.Error())
 	}
+	settlementAudit, settlementErr := model.RecordUsageSettlementWithSummary(profitUsageInput)
+	if settlementErr != nil {
+		logger.LogError(ctx, "error recording profit usage settlement: "+settlementErr.Error())
+	} else if settlementAudit != nil {
+		other["downstream_charge_cny"] = settlementAudit.RealizedRevenueCNY
+		other["upstream_cost_cny"] = settlementAudit.UpstreamCostCNY
+		other["request_gross_profit_cny"] = settlementAudit.RequestGrossProfitCNY
+	}
+	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
+		ChannelId:        relayInfo.ChannelId,
+		PromptTokens:     usage.InputTokens,
+		CompletionTokens: usage.OutputTokens,
+		ModelName:        logModel,
+		TokenName:        tokenName,
+		Quota:            quota,
+		Content:          logContent,
+		TokenId:          relayInfo.TokenId,
+		UseTimeSeconds:   int(useTimeSeconds),
+		IsStream:         relayInfo.IsStream,
+		Group:            relayInfo.UsingGroup,
+		Other:            other,
+	})
 }
 
 func CalcOpenRouterCacheCreateTokens(usage dto.Usage, priceData types.PriceData) int {
 	if priceData.CacheCreationRatio == 1 {
 		return 0
 	}
-	quotaPrice := priceData.ModelRatio / common.QuotaPerUnit
-	promptCacheCreatePrice := quotaPrice * priceData.CacheCreationRatio
-	promptCacheReadPrice := quotaPrice * priceData.CacheRatio
-	completionPrice := quotaPrice * priceData.CompletionRatio
+	promptPricePerTokenUSD := priceData.ModelRatio * 2 / 1_000_000.0
+	promptCacheCreatePrice := promptPricePerTokenUSD * priceData.CacheCreationRatio
+	promptCacheReadPrice := promptPricePerTokenUSD * priceData.CacheRatio
+	completionPrice := promptPricePerTokenUSD * priceData.CompletionRatio
 
 	cost, _ := usage.Cost.(float64)
 	totalPromptTokens := float64(usage.PromptTokens)
@@ -296,10 +302,10 @@ func CalcOpenRouterCacheCreateTokens(usage dto.Usage, priceData types.PriceData)
 	promptCacheReadTokens := float64(usage.PromptTokensDetails.CachedTokens)
 
 	return int(math.Round((cost -
-		totalPromptTokens*quotaPrice +
-		promptCacheReadTokens*(quotaPrice-promptCacheReadPrice) -
+		totalPromptTokens*promptPricePerTokenUSD +
+		promptCacheReadTokens*(promptPricePerTokenUSD-promptCacheReadPrice) -
 		completionTokens*completionPrice) /
-		(promptCacheCreatePrice - quotaPrice)))
+		(promptCacheCreatePrice - promptPricePerTokenUSD)))
 }
 
 func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent string) {
@@ -386,25 +392,11 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	if tieredResult != nil {
 		InjectTieredBillingInfo(other, relayInfo, tieredResult)
 	}
-	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
-		ChannelId:        relayInfo.ChannelId,
-		PromptTokens:     usage.PromptTokens,
-		CompletionTokens: usage.CompletionTokens,
-		ModelName:        logModel,
-		TokenName:        tokenName,
-		Quota:            quota,
-		Content:          logContent,
-		TokenId:          relayInfo.TokenId,
-		UseTimeSeconds:   int(useTimeSeconds),
-		IsStream:         relayInfo.IsStream,
-		Group:            relayInfo.UsingGroup,
-		Other:            other,
-	})
 	settlementSource := model.ProfitLotTypeWallet
 	if relayInfo.BillingSource == BillingSourceSubscription {
 		settlementSource = model.ProfitLotTypeSubscription
 	}
-	if err := model.RecordUsageSettlement(model.ProfitUsageInput{
+	profitUsageInput := model.ProfitUsageInput{
 		RequestId:                           relayInfo.RequestId,
 		UserId:                              relayInfo.UserId,
 		SourceType:                          settlementSource,
@@ -422,9 +414,29 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		DownstreamCacheWriteRatioSnapshot:   relayInfo.PriceData.CacheCreationRatio,
 		DownstreamGroupRatioSnapshot:        relayInfo.PriceData.GroupRatioInfo.GroupRatio,
 		DownstreamGroupSpecialRatioSnapshot: relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio,
-	}); err != nil {
-		logger.LogError(ctx, "error recording profit usage settlement: "+err.Error())
 	}
+	settlementAudit, settlementErr := model.RecordUsageSettlementWithSummary(profitUsageInput)
+	if settlementErr != nil {
+		logger.LogError(ctx, "error recording profit usage settlement: "+settlementErr.Error())
+	} else if settlementAudit != nil {
+		other["downstream_charge_cny"] = settlementAudit.RealizedRevenueCNY
+		other["upstream_cost_cny"] = settlementAudit.UpstreamCostCNY
+		other["request_gross_profit_cny"] = settlementAudit.RequestGrossProfitCNY
+	}
+	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
+		ChannelId:        relayInfo.ChannelId,
+		PromptTokens:     usage.PromptTokens,
+		CompletionTokens: usage.CompletionTokens,
+		ModelName:        logModel,
+		TokenName:        tokenName,
+		Quota:            quota,
+		Content:          logContent,
+		TokenId:          relayInfo.TokenId,
+		UseTimeSeconds:   int(useTimeSeconds),
+		IsStream:         relayInfo.IsStream,
+		Group:            relayInfo.UsingGroup,
+		Other:            other,
+	})
 }
 
 func PreConsumeTokenQuota(relayInfo *relaycommon.RelayInfo, quota int) error {

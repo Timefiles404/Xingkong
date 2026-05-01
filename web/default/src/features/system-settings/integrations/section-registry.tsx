@@ -8,7 +8,7 @@ import { WorkerSettingsSection } from './worker-settings-section'
 
 function normalizeUsdPerCnyRate(value: number | undefined) {
   if (!value || value <= 0) return 1 / 7.2
-  return value > 1 ? 1 / value : value
+  return value
 }
 
 const INTEGRATIONS_SECTIONS = [

@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/cachex"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/samber/hot"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
@@ -168,6 +169,9 @@ type SubscriptionPlan struct {
 	// Upgrade user group after purchase (empty = no change)
 	UpgradeGroup string `json:"upgrade_group" gorm:"type:varchar(64);default:''"`
 
+	ModelLimitsEnabled bool   `json:"model_limits_enabled" gorm:"default:false"`
+	ModelLimits        string `json:"model_limits" gorm:"type:text"`
+
 	// Total quota (amount in quota units, 0 = unlimited)
 	TotalAmount int64 `json:"total_amount" gorm:"type:bigint;not null;default:0"`
 
@@ -253,6 +257,8 @@ type UserSubscription struct {
 
 	UpgradeGroup  string `json:"upgrade_group" gorm:"type:varchar(64);default:''"`
 	PrevUserGroup string `json:"prev_user_group" gorm:"type:varchar(64);default:''"`
+	ModelLimitsEnabled bool   `json:"model_limits_enabled" gorm:"default:false"`
+	ModelLimits        string `json:"model_limits" gorm:"type:text"`
 
 	CreatedAt int64 `json:"created_at" gorm:"bigint"`
 	UpdatedAt int64 `json:"updated_at" gorm:"bigint"`
@@ -272,6 +278,23 @@ func (s *UserSubscription) BeforeUpdate(tx *gorm.DB) error {
 
 type SubscriptionSummary struct {
 	Subscription *UserSubscription `json:"subscription"`
+}
+
+type SubscriptionPlanMemberSummary struct {
+	SubscriptionId   int    `json:"subscription_id"`
+	UserId           int    `json:"user_id"`
+	Username         string `json:"username"`
+	Status           string `json:"status"`
+	StartTime        int64  `json:"start_time"`
+	EndTime          int64  `json:"end_time"`
+	AmountTotal      int64  `json:"amount_total"`
+	AmountUsed       int64  `json:"amount_used"`
+	RemainingAmount  int64  `json:"remaining_amount"`
+	FiveHourUsage    int64  `json:"five_hour_usage"`
+	DailyUsage       int64  `json:"daily_usage"`
+	WeeklyUsage      int64  `json:"weekly_usage"`
+	ModelLimits      string `json:"model_limits"`
+	ModelLimitsEnabled bool `json:"model_limits_enabled"`
 }
 
 type SubscriptionUsageLedger struct {
@@ -330,6 +353,77 @@ func clampSubscriptionUsage(sum int64) int64 {
 	return sum
 }
 
+func normalizeSubscriptionModelLimits(raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		return ""
+	}
+	parts := strings.Split(raw, ",")
+	seen := make(map[string]struct{}, len(parts))
+	cleaned := make([]string, 0, len(parts))
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		cleaned = append(cleaned, value)
+	}
+	return strings.Join(cleaned, ",")
+}
+
+func subscriptionModelLimitsToMap(raw string) map[string]bool {
+	normalized := normalizeSubscriptionModelLimits(raw)
+	if normalized == "" {
+		return map[string]bool{}
+	}
+	limits := make(map[string]bool)
+	for _, value := range strings.Split(normalized, ",") {
+		limits[ratio_setting.FormatMatchingModelName(value)] = true
+	}
+	return limits
+}
+
+func (p *SubscriptionPlan) NormalizeModelLimits() {
+	p.ModelLimits = normalizeSubscriptionModelLimits(p.ModelLimits)
+	p.ModelLimitsEnabled = p.ModelLimits != ""
+}
+
+func (p *SubscriptionPlan) GetModelLimits() []string {
+	if p == nil {
+		return []string{}
+	}
+	if p.ModelLimits == "" {
+		return []string{}
+	}
+	return strings.Split(p.ModelLimits, ",")
+}
+
+func (p *SubscriptionPlan) AllowsModel(modelName string) bool {
+	if p == nil || !p.ModelLimitsEnabled || strings.TrimSpace(p.ModelLimits) == "" {
+		return true
+	}
+	limits := subscriptionModelLimitsToMap(p.ModelLimits)
+	matchName := ratio_setting.FormatMatchingModelName(modelName)
+	return limits[matchName]
+}
+
+func (s *UserSubscription) NormalizeModelLimits() {
+	s.ModelLimits = normalizeSubscriptionModelLimits(s.ModelLimits)
+	s.ModelLimitsEnabled = s.ModelLimits != ""
+}
+
+func (s *UserSubscription) AllowsModel(modelName string) bool {
+	if s == nil || !s.ModelLimitsEnabled || strings.TrimSpace(s.ModelLimits) == "" {
+		return true
+	}
+	limits := subscriptionModelLimitsToMap(s.ModelLimits)
+	matchName := ratio_setting.FormatMatchingModelName(modelName)
+	return limits[matchName]
+}
+
 func maxInt64(a int64, b int64) int64 {
 	if a > b {
 		return a
@@ -368,6 +462,7 @@ func getSubscriptionPlanByIdTx(tx *gorm.DB, id int) (*SubscriptionPlan, error) {
 	if err := query.Where("id = ?", id).First(&plan).Error; err != nil {
 		return nil, err
 	}
+	plan.NormalizeModelLimits()
 	_ = getSubscriptionPlanCache().SetWithTTL(key, plan, subscriptionPlanCacheTTL())
 	return &plan, nil
 }
@@ -448,6 +543,7 @@ func CreateUserSubscriptionFromPlanWithPaidAmountTx(tx *gorm.DB, userId int, pla
 	if userId <= 0 {
 		return nil, errors.New("invalid user id")
 	}
+	plan.NormalizeModelLimits()
 	if plan.MaxPurchasePerUser > 0 {
 		var count int64
 		if err := tx.Model(&UserSubscription{}).
@@ -495,9 +591,12 @@ func CreateUserSubscriptionFromPlanWithPaidAmountTx(tx *gorm.DB, userId int, pla
 		Source:              source,
 		UpgradeGroup:        upgradeGroup,
 		PrevUserGroup:       prevGroup,
+		ModelLimitsEnabled:  plan.ModelLimitsEnabled,
+		ModelLimits:         plan.ModelLimits,
 		CreatedAt:           common.GetTimestamp(),
 		UpdatedAt:           common.GetTimestamp(),
 	}
+	sub.NormalizeModelLimits()
 	if err := tx.Create(sub).Error; err != nil {
 		return nil, err
 	}
@@ -891,6 +990,69 @@ func buildSubscriptionSummaries(subs []UserSubscription) []SubscriptionSummary {
 	return result
 }
 
+func ListSubscriptionPlanMembers(planId int) ([]SubscriptionPlanMemberSummary, error) {
+	if planId <= 0 {
+		return nil, errors.New("invalid planId")
+	}
+
+	now := common.GetTimestamp()
+	type subscriptionPlanMemberRow struct {
+		UserSubscription
+		Username string `gorm:"column:username"`
+	}
+
+	var rows []subscriptionPlanMemberRow
+	if err := DB.Table("user_subscriptions AS us").
+		Select("us.*, u.username AS username").
+		Joins("LEFT JOIN users u ON u.id = us.user_id").
+		Where("us.plan_id = ?", planId).
+		Order(gorm.Expr("CASE WHEN us.status = 'active' AND us.end_time > ? THEN 0 ELSE 1 END", now)).
+		Order("us.end_time DESC, us.id DESC").
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+
+	result := make([]SubscriptionPlanMemberSummary, 0, len(rows))
+	for _, row := range rows {
+		fiveHourUsage, err := getSubscriptionWindowUsageTx(DB, row.Id, SubscriptionWindowFiveHours, now, row.StartTime)
+		if err != nil {
+			return nil, err
+		}
+		dailyUsage, err := getSubscriptionWindowUsageTx(DB, row.Id, SubscriptionWindowDaily, now, row.StartTime)
+		if err != nil {
+			return nil, err
+		}
+		weeklyUsage, err := getSubscriptionWindowUsageTx(DB, row.Id, SubscriptionWindowWeekly, now, row.StartTime)
+		if err != nil {
+			return nil, err
+		}
+
+		remainingAmount := int64(0)
+		if row.AmountTotal > 0 {
+			remainingAmount = clampSubscriptionUsage(row.AmountTotal - row.AmountUsed)
+		}
+
+		result = append(result, SubscriptionPlanMemberSummary{
+			SubscriptionId:    row.Id,
+			UserId:            row.UserId,
+			Username:          row.Username,
+			Status:            row.Status,
+			StartTime:         row.StartTime,
+			EndTime:           row.EndTime,
+			AmountTotal:       row.AmountTotal,
+			AmountUsed:        row.AmountUsed,
+			RemainingAmount:   remainingAmount,
+			FiveHourUsage:     fiveHourUsage,
+			DailyUsage:        dailyUsage,
+			WeeklyUsage:       weeklyUsage,
+			ModelLimits:       row.ModelLimits,
+			ModelLimitsEnabled: row.ModelLimitsEnabled,
+		})
+	}
+
+	return result, nil
+}
+
 // AdminInvalidateUserSubscription marks a user subscription as cancelled and ends it immediately.
 func AdminInvalidateUserSubscription(userSubscriptionId int) (string, error) {
 	if userSubscriptionId <= 0 {
@@ -1266,6 +1428,9 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 		}
 		for _, candidate := range subs {
 			sub := candidate
+			if !sub.AllowsModel(modelName) {
+				continue
+			}
 			usedBefore := sub.AmountUsed
 			if err := checkSubscriptionRollingLimitsTx(tx, &sub, amount, now); err != nil {
 				if strings.Contains(err.Error(), "limit exceeded") || strings.Contains(err.Error(), "quota insufficient") {
@@ -1309,7 +1474,7 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 			returnValue.AmountUsedAfter = sub.AmountUsed
 			return nil
 		}
-		return fmt.Errorf("subscription quota insufficient, need=%d", amount)
+		return fmt.Errorf("subscription quota insufficient or model not allowed, need=%d, model=%s", amount, modelName)
 	})
 	if err != nil {
 		return nil, err

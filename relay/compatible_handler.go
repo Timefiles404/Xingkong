@@ -200,6 +200,11 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 
 	usage, newApiErr := adaptor.DoResponse(c, httpResp, info)
 	if newApiErr != nil {
+		if usageDto, ok := usage.(*dto.Usage); ok {
+			service.MarkRelayErrorBillable(c, "text", usageDto)
+		} else {
+			service.MarkRelayErrorBillable(c, "text", nil)
+		}
 		// reset status code 重置状态码
 		service.ResetStatusCode(newApiErr, statusCodeMappingStr)
 		return newApiErr

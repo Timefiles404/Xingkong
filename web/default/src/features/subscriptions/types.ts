@@ -21,6 +21,8 @@ export const subscriptionPlanSchema = z.object({
   daily_amount: z.number().optional(),
   weekly_amount: z.number().optional(),
   upgrade_group: z.string().optional(),
+  model_limits_enabled: z.boolean().optional(),
+  model_limits: z.string().optional(),
   stripe_price_id: z.string().optional(),
   creem_product_id: z.string().optional(),
 })
@@ -29,6 +31,27 @@ export type SubscriptionPlan = z.infer<typeof subscriptionPlanSchema>
 
 export interface PlanRecord {
   plan: SubscriptionPlan
+}
+
+export interface PlanSubscriber {
+  subscription_id: number
+  user_id: number
+  username: string
+  status: string
+  start_time: number
+  end_time: number
+  amount_total: number
+  amount_used: number
+  remaining_amount: number
+  five_hour_usage: number
+  daily_usage: number
+  weekly_usage: number
+  model_limits?: string
+  model_limits_enabled?: boolean
+}
+
+export interface PlanSubscriberRecord {
+  member: PlanSubscriber
 }
 
 // ============================================================================
@@ -49,6 +72,8 @@ export const userSubscriptionSchema = z.object({
   amount_daily_limit: z.number().optional(),
   amount_weekly_limit: z.number().optional(),
   paid_amount: z.number().optional(),
+  model_limits_enabled: z.boolean().optional(),
+  model_limits: z.string().optional(),
 })
 
 export type UserSubscription = z.infer<typeof userSubscriptionSchema>

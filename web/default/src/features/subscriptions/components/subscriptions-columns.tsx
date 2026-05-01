@@ -1,17 +1,50 @@
 import { useMemo } from 'react'
 import { type ColumnDef } from '@tanstack/react-table'
+import { ChevronDown, ChevronRight } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { DataTableColumnHeader } from '@/components/data-table'
 import { StatusBadge } from '@/components/status-badge'
+import { Button } from '@/components/ui/button'
 import { formatDuration, formatLimitAmount } from '../lib'
 import type { PlanRecord } from '../types'
 import { DataTableRowActions } from './data-table-row-actions'
 
-export function useSubscriptionsColumns(): ColumnDef<PlanRecord>[] {
+export function useSubscriptionsColumns(
+  expandedPlanIds: Set<number>,
+  togglePlan: (planId: number) => void
+): ColumnDef<PlanRecord>[] {
   const { t } = useTranslation()
 
   return useMemo(
     (): ColumnDef<PlanRecord>[] => [
+      {
+        id: 'expand',
+        meta: { label: '', mobileHidden: true },
+        header: () => null,
+        cell: ({ row }) => {
+          const planId = row.original.plan.id
+          const expanded = expandedPlanIds.has(planId)
+          return (
+            <Button
+              type='button'
+              variant='ghost'
+              size='icon'
+              className='h-8 w-8'
+              onClick={(event) => {
+                event.stopPropagation()
+                togglePlan(planId)
+              }}
+            >
+              {expanded ? (
+                <ChevronDown className='h-4 w-4' />
+              ) : (
+                <ChevronRight className='h-4 w-4' />
+              )}
+            </Button>
+          )
+        },
+        size: 48,
+      },
       {
         accessorFn: (row) => row.plan.id,
         id: 'id',
@@ -215,6 +248,6 @@ export function useSubscriptionsColumns(): ColumnDef<PlanRecord>[] {
         size: 80,
       },
     ],
-    [t]
+    [expandedPlanIds, t, togglePlan]
   )
 }

@@ -170,6 +170,9 @@ export interface LogOtherData {
   subscription_consumed?: number
   subscription_remain?: number
   subscription_total?: number
+  downstream_charge_cny?: number
+  upstream_cost_cny?: number
+  request_gross_profit_cny?: number
 }
 
 /**

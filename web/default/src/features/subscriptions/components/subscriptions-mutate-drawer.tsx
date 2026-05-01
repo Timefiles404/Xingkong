@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react'
 import { useForm, type Resolver } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useQuery } from '@tanstack/react-query'
 import { CalendarClock, CreditCard, Gauge, Settings2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { getUserModels } from '@/lib/api'
+import { MultiSelect } from '@/components/multi-select'
 import { Button } from '@/components/ui/button'
 import {
   Form,
@@ -60,6 +63,13 @@ export function SubscriptionsMutateDrawer({
   const { triggerRefresh } = useSubscriptions()
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [groupOptions, setGroupOptions] = useState<string[]>([])
+  const { data: modelsData } = useQuery({
+    queryKey: ['user-models'],
+    queryFn: getUserModels,
+    staleTime: 5 * 60 * 1000,
+    enabled: open,
+  })
+  const models = modelsData?.data || []
 
   const schema = getPlanFormSchema(t)
   const form = useForm<PlanFormValues>({
@@ -326,6 +336,33 @@ export function SubscriptionsMutateDrawer({
                   )}
                 />
               </div>
+
+              <FormField
+                control={form.control}
+                name='model_limits'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Model Limits')}</FormLabel>
+                    <FormControl>
+                      <MultiSelect
+                        options={models.map((model) => ({
+                          label: model,
+                          value: model,
+                        }))}
+                        selected={field.value}
+                        onChange={field.onChange}
+                        placeholder={t('Select models (empty for allow all)')}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'When set, subscription quota can only be used for the selected models.'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
             </div>
 
             {/* Duration Settings */}

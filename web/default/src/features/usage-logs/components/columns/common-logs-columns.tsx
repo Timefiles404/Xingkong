@@ -6,6 +6,7 @@ import { formatBillingCurrencyFromUSD } from '@/lib/currency'
 import {
   formatUseTime,
   formatLogQuota,
+  formatCNYAmount,
   formatTimestampToDate,
 } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -702,12 +703,34 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
         }
 
         const quotaStr = formatLogQuota(quota)
+        const downstreamChargeCNY = other?.downstream_charge_cny
+        const upstreamCostCNY = other?.upstream_cost_cny
 
         return (
           <div className='flex flex-col gap-0.5'>
             <span className='border-border/80 inline-flex w-fit items-center rounded-md border bg-muted/60 px-1.5 py-0.5 font-mono text-xs font-semibold tabular-nums'>
               {quotaStr}
             </span>
+            {isAdmin &&
+              ((downstreamChargeCNY != null &&
+                Number.isFinite(downstreamChargeCNY)) ||
+                (upstreamCostCNY != null &&
+                  Number.isFinite(upstreamCostCNY))) && (
+                <div className='flex flex-col gap-0.5 text-[11px] leading-snug'>
+                  {downstreamChargeCNY != null &&
+                    Number.isFinite(downstreamChargeCNY) && (
+                      <span className='text-muted-foreground/70'>
+                        {t('Downstream (CNY)')}: {formatCNYAmount(downstreamChargeCNY)}
+                      </span>
+                    )}
+                  {upstreamCostCNY != null &&
+                    Number.isFinite(upstreamCostCNY) && (
+                      <span className='text-muted-foreground/70'>
+                        {t('Upstream (CNY)')}: {formatCNYAmount(upstreamCostCNY)}
+                      </span>
+                    )}
+                </div>
+              )}
           </div>
         )
       },

@@ -444,6 +444,8 @@ export async function fetchModels(data: {
   base_url: string
   type: number
   key: string
+  proxy?: string
+  skip_tls_verify?: boolean
 }): Promise<FetchModelsResponse> {
   const res = await api.post('/api/channel/fetch_models', data)
   return res.data

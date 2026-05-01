@@ -10,7 +10,7 @@ function normalizeUsdPerCnyRate(value: unknown): number {
         ? Number.parseFloat(value)
         : 0
   if (!Number.isFinite(raw) || raw <= 0) return 0
-  return raw > 1 ? 1 / raw : raw
+  return raw
 }
 
 // ============================================================================
@@ -51,6 +51,7 @@ export const channelFormSchema = z.object({
   force_format: z.boolean().optional(),
   thinking_to_content: z.boolean().optional(),
   proxy: z.string().optional(),
+  skip_tls_verify: z.boolean().optional(),
   pass_through_body_enabled: z.boolean().optional(),
   system_prompt: z.string().optional(),
   system_prompt_override: z.boolean().optional(),
@@ -110,6 +111,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   force_format: false,
   thinking_to_content: false,
   proxy: '',
+  skip_tls_verify: false,
   pass_through_body_enabled: false,
   system_prompt: '',
   system_prompt_override: false,
@@ -147,6 +149,7 @@ export function transformChannelToFormDefaults(
     force_format: false,
     thinking_to_content: false,
     proxy: '',
+    skip_tls_verify: false,
     pass_through_body_enabled: false,
     system_prompt: '',
     system_prompt_override: false,
@@ -159,6 +162,7 @@ export function transformChannelToFormDefaults(
         force_format: parsed.force_format || false,
         thinking_to_content: parsed.thinking_to_content || false,
         proxy: parsed.proxy || '',
+        skip_tls_verify: parsed.skip_tls_verify === true,
         pass_through_body_enabled: parsed.pass_through_body_enabled || false,
         system_prompt: parsed.system_prompt || '',
         system_prompt_override: parsed.system_prompt_override || false,
@@ -200,10 +204,16 @@ export function transformChannelToFormDefaults(
       allowInferenceGeo = parsed.allow_inference_geo === true
       allowSpeed = parsed.allow_speed === true
       claudeBetaQuery = parsed.claude_beta_query === true
-      profitUpstreamUSDPerCNY = normalizeUsdPerCnyRate(
-        parsed.profit_upstream_usd_per_cny ??
+      if (parsed.profit_upstream_usd_per_cny !== undefined) {
+        profitUpstreamUSDPerCNY = normalizeUsdPerCnyRate(
+          parsed.profit_upstream_usd_per_cny
+        )
+      } else if (parsed.profit_upstream_cny_per_usd !== undefined) {
+        const legacyRate = normalizeUsdPerCnyRate(
           parsed.profit_upstream_cny_per_usd
-      )
+        )
+        profitUpstreamUSDPerCNY = legacyRate > 0 ? 1 / legacyRate : 0
+      }
       upstreamModelUpdateCheckEnabled =
         parsed.upstream_model_update_check_enabled === true
       upstreamModelUpdateAutoSyncEnabled =
@@ -252,6 +262,7 @@ export function transformChannelToFormDefaults(
     vertex_key_type: vertexKeyType,
     azure_responses_version: azureResponsesVersion,
     aws_key_type: awsKeyType,
+    skip_tls_verify: extraSettings.skip_tls_verify,
     allow_service_tier: allowServiceTier,
     disable_store: disableStore,
     allow_include_obfuscation: allowIncludeObfuscation,
@@ -274,6 +285,7 @@ function buildSettingJSON(formData: ChannelFormValues): string {
     force_format: formData.force_format || false,
     thinking_to_content: formData.thinking_to_content || false,
     proxy: formData.proxy || '',
+    skip_tls_verify: formData.skip_tls_verify === true,
     pass_through_body_enabled: formData.pass_through_body_enabled || false,
     system_prompt: formData.system_prompt || '',
     system_prompt_override: formData.system_prompt_override || false,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -972,9 +973,11 @@ func UpdateChannel(c *gin.Context) {
 
 func FetchModels(c *gin.Context) {
 	var req struct {
-		BaseURL string `json:"base_url"`
-		Type    int    `json:"type"`
-		Key     string `json:"key"`
+		BaseURL       string `json:"base_url"`
+		Type          int    `json:"type"`
+		Key           string `json:"key"`
+		Proxy         string `json:"proxy"`
+		SkipTLSVerify bool   `json:"skip_tls_verify"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -1017,7 +1020,7 @@ func FetchModels(c *gin.Context) {
 	}
 
 	if req.Type == constant.ChannelTypeGemini {
-		models, err := gemini.FetchGeminiModels(baseURL, key, "")
+		models, err := gemini.FetchGeminiModels(baseURL, key, req.Proxy, req.SkipTLSVerify)
 		if err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
@@ -1033,7 +1036,6 @@ func FetchModels(c *gin.Context) {
 		return
 	}
 
-	client := &http.Client{}
 	url := fmt.Sprintf("%s/v1/models", baseURL)
 
 	request, err := http.NewRequest("GET", url, nil)
@@ -1047,6 +1049,15 @@ func FetchModels(c *gin.Context) {
 
 	request.Header.Set("Authorization", "Bearer "+key)
 
+	client, err := service.GetHttpClientWithChannelOptions(req.Proxy, req.SkipTLSVerify)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
+
 	response, err := client.Do(request)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -1055,15 +1066,24 @@ func FetchModels(c *gin.Context) {
 		})
 		return
 	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
+
 	//check status code
 	if response.StatusCode != http.StatusOK {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
-			"message": "Failed to fetch models",
+			"message": fmt.Sprintf("Failed to fetch models: status=%d body=%s", response.StatusCode, strings.TrimSpace(string(body))),
 		})
 		return
 	}
-	defer response.Body.Close()
 
 	var result struct {
 		Data []struct {
@@ -1071,7 +1091,7 @@ func FetchModels(c *gin.Context) {
 		} `json:"data"`
 	}
 
-	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(body, &result); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
 			"message": err.Error(),

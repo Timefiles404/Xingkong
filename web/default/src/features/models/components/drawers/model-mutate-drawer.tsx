@@ -174,7 +174,7 @@ function normalizeUsdPerCnyRate(value: unknown) {
         ? Number.parseFloat(value)
         : 0
   if (!Number.isFinite(raw) || raw <= 0) return null
-  return raw > 1 ? 1 / raw : raw
+  return raw
 }
 
 function stringifyMeta(meta: AdminModelMeta) {
@@ -272,9 +272,15 @@ function extractChannelUpstreamRate(channel?: Channel | null): number | null {
       profit_upstream_usd_per_cny?: unknown
       profit_upstream_cny_per_usd?: unknown
     }
-    const normalized = normalizeUsdPerCnyRate(
-      parsed.profit_upstream_usd_per_cny ?? parsed.profit_upstream_cny_per_usd
-    )
+    let normalized: number | null = null
+    if (parsed.profit_upstream_usd_per_cny !== undefined) {
+      normalized = normalizeUsdPerCnyRate(parsed.profit_upstream_usd_per_cny)
+    } else if (parsed.profit_upstream_cny_per_usd !== undefined) {
+      const legacyRate = normalizeUsdPerCnyRate(
+        parsed.profit_upstream_cny_per_usd
+      )
+      normalized = legacyRate ? 1 / legacyRate : null
+    }
     if (normalized) {
       return normalized
     }
@@ -811,6 +817,7 @@ export function ModelMutateDrawer({
           queryKey: modelsQueryKeys.detail(currentRow?.id || 0),
         })
         queryClient.invalidateQueries({ queryKey: ['system-options'] })
+        queryClient.invalidateQueries({ queryKey: ['pricing'] })
         onOpenChange(false)
       } catch (error) {
         toast.error((error as Error).message || 'Operation failed')

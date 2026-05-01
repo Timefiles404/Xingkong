@@ -39,6 +39,16 @@ func SetTheme(t string) {
 // var ChatLink = ""
 // var ChatLink2 = ""
 var QuotaPerUnit = 10 * 1000.0 // 1 USD = 10,000 internal quota units
+
+// ModelRatioQuotaFactor converts legacy per-token model ratios into current quota units.
+// Historical token-billing ratios are stored as: prompt_price_usd_per_1m / 2.
+// To convert weighted tokens into quota we need:
+//   weighted_tokens * model_ratio * (2 * QuotaPerUnit / 1_000_000)
+// This preserves old behavior when QuotaPerUnit=500000 and keeps billing correct
+// after switching to newer quota bases such as 10000.
+func ModelRatioQuotaFactor() float64 {
+	return 2 * QuotaPerUnit / 1_000_000.0
+}
 // 保留旧变量以兼容历史逻辑，实际展示由 general_setting.quota_display_type 控制
 var DisplayInCurrencyEnabled = true
 var DisplayTokenStatEnabled = true

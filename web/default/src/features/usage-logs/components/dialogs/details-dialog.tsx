@@ -14,7 +14,12 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
-import { formatLogQuota, formatTokens, formatUseTime } from '@/lib/format'
+import {
+  formatCNYAmount,
+  formatLogQuota,
+  formatTokens,
+  formatUseTime,
+} from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { Button } from '@/components/ui/button'
@@ -125,7 +130,6 @@ function BillingBreakdown(props: {
   const { t } = useTranslation()
   const { log, other, isAdmin } = props
   const isPerCall = isPerCallBilling(other.model_price)
-  const isClaude = other.claude === true
   const tieredSummary = getTieredBillingSummary(other)
 
   const rows: Array<{ label: string; value: string }> = []
@@ -184,7 +188,7 @@ function BillingBreakdown(props: {
     })
   }
 
-  if (!tieredSummary && isClaude && hasAnyCacheTokens(other)) {
+  if (!tieredSummary && hasAnyCacheTokens(other)) {
     if (other.cache_ratio != null && other.cache_ratio !== 1) {
       rows.push({
         label: t('Cache Read'),
@@ -287,6 +291,39 @@ function BillingBreakdown(props: {
     label: t('Total Cost'),
     value: formatLogQuota(log.quota),
   })
+
+  if (
+    isAdmin &&
+    other.downstream_charge_cny != null &&
+    Number.isFinite(other.downstream_charge_cny)
+  ) {
+    rows.push({
+      label: t('Downstream (CNY)'),
+      value: formatCNYAmount(other.downstream_charge_cny),
+    })
+  }
+
+  if (
+    isAdmin &&
+    other.upstream_cost_cny != null &&
+    Number.isFinite(other.upstream_cost_cny)
+  ) {
+    rows.push({
+      label: t('Upstream (CNY)'),
+      value: formatCNYAmount(other.upstream_cost_cny),
+    })
+  }
+
+  if (
+    isAdmin &&
+    other.request_gross_profit_cny != null &&
+    Number.isFinite(other.request_gross_profit_cny)
+  ) {
+    rows.push({
+      label: t('Gross Profit (CNY)'),
+      value: formatCNYAmount(other.request_gross_profit_cny),
+    })
+  }
 
   if (rows.length === 0) return null
 

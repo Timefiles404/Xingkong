@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -141,10 +142,11 @@ func GetResponseBody(method, url string, channel *model.Channel, headers http.He
 	if err != nil {
 		return nil, err
 	}
+	setting := channel.GetSetting()
 	for k := range headers {
 		req.Header.Add(k, headers.Get(k))
 	}
-	client, err := service.NewProxyHttpClient(channel.GetSetting().Proxy)
+	client, err := service.GetHttpClientWithChannelOptions(setting.Proxy, setting.SkipTLSVerify)
 	if err != nil {
 		return nil, err
 	}
@@ -152,16 +154,17 @@ func GetResponseBody(method, url string, channel *model.Channel, headers http.He
 	if err != nil {
 		return nil, err
 	}
-	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("status code: %d", res.StatusCode)
-	}
+	defer res.Body.Close()
 	body, err := io.ReadAll(res.Body)
 	if err != nil {
 		return nil, err
 	}
-	err = res.Body.Close()
-	if err != nil {
-		return nil, err
+	if res.StatusCode != http.StatusOK {
+		msg := strings.TrimSpace(string(body))
+		if msg == "" {
+			return nil, fmt.Errorf("status code: %d", res.StatusCode)
+		}
+		return nil, fmt.Errorf("status code: %d, body: %s", res.StatusCode, msg)
 	}
 	return body, nil
 }

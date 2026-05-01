@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"net/http"
@@ -20,6 +21,23 @@ var (
 	proxyClientLock sync.Mutex
 	proxyClients    = make(map[string]*http.Client)
 )
+
+func cloneTransportWithTLSPreference(base *http.Transport, skipTLSVerify bool) *http.Transport {
+	if base == nil {
+		base = &http.Transport{}
+	}
+	cloned := base.Clone()
+	if skipTLSVerify || common.TLSInsecureSkipVerify {
+		if cloned.TLSClientConfig != nil {
+			cfg := cloned.TLSClientConfig.Clone()
+			cfg.InsecureSkipVerify = true
+			cloned.TLSClientConfig = cfg
+		} else {
+			cloned.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		}
+	}
+	return cloned
+}
 
 func checkRedirect(req *http.Request, via []*http.Request) error {
 	fetchSetting := system_setting.GetFetchSetting()
@@ -62,12 +80,29 @@ func GetHttpClient() *http.Client {
 	return httpClient
 }
 
-// GetHttpClientWithProxy returns the default client or a proxy-enabled one when proxyURL is provided.
-func GetHttpClientWithProxy(proxyURL string) (*http.Client, error) {
-	if proxyURL == "" {
+func GetHttpClientWithChannelOptions(proxyURL string, skipTLSVerify bool) (*http.Client, error) {
+	if proxyURL != "" {
+		return NewProxyHttpClientWithTLS(proxyURL, skipTLSVerify)
+	}
+	if !skipTLSVerify {
 		return GetHttpClient(), nil
 	}
-	return NewProxyHttpClient(proxyURL)
+	base := GetHttpClient()
+	if base == nil {
+		base = http.DefaultClient
+	}
+	client := *base
+	if transport, ok := base.Transport.(*http.Transport); ok {
+		client.Transport = cloneTransportWithTLSPreference(transport, true)
+	} else {
+		client.Transport = cloneTransportWithTLSPreference(nil, true)
+	}
+	return &client, nil
+}
+
+// GetHttpClientWithProxy returns the default client or a proxy-enabled one when proxyURL is provided.
+func GetHttpClientWithProxy(proxyURL string) (*http.Client, error) {
+	return GetHttpClientWithChannelOptions(proxyURL, false)
 }
 
 // ResetProxyClientCache 清空代理客户端缓存，确保下次使用时重新初始化
@@ -84,15 +119,21 @@ func ResetProxyClientCache() {
 
 // NewProxyHttpClient 创建支持代理的 HTTP 客户端
 func NewProxyHttpClient(proxyURL string) (*http.Client, error) {
+	return NewProxyHttpClientWithTLS(proxyURL, false)
+}
+
+func NewProxyHttpClientWithTLS(proxyURL string, skipTLSVerify bool) (*http.Client, error) {
 	if proxyURL == "" {
-		if client := GetHttpClient(); client != nil {
-			return client, nil
-		}
-		return http.DefaultClient, nil
+		return GetHttpClientWithChannelOptions("", skipTLSVerify)
+	}
+
+	cacheKey := proxyURL
+	if skipTLSVerify {
+		cacheKey += "|skip_tls_verify=1"
 	}
 
 	proxyClientLock.Lock()
-	if client, ok := proxyClients[proxyURL]; ok {
+	if client, ok := proxyClients[cacheKey]; ok {
 		proxyClientLock.Unlock()
 		return client, nil
 	}
@@ -105,22 +146,19 @@ func NewProxyHttpClient(proxyURL string) (*http.Client, error) {
 
 	switch parsedURL.Scheme {
 	case "http", "https":
-		transport := &http.Transport{
+		transport := cloneTransportWithTLSPreference(&http.Transport{
 			MaxIdleConns:        common.RelayMaxIdleConns,
 			MaxIdleConnsPerHost: common.RelayMaxIdleConnsPerHost,
 			ForceAttemptHTTP2:   true,
 			Proxy:               http.ProxyURL(parsedURL),
-		}
-		if common.TLSInsecureSkipVerify {
-			transport.TLSClientConfig = common.InsecureTLSConfig
-		}
+		}, skipTLSVerify)
 		client := &http.Client{
 			Transport:     transport,
 			CheckRedirect: checkRedirect,
 		}
 		client.Timeout = time.Duration(common.RelayTimeout) * time.Second
 		proxyClientLock.Lock()
-		proxyClients[proxyURL] = client
+		proxyClients[cacheKey] = client
 		proxyClientLock.Unlock()
 		return client, nil
 
@@ -144,22 +182,19 @@ func NewProxyHttpClient(proxyURL string) (*http.Client, error) {
 			return nil, err
 		}
 
-		transport := &http.Transport{
+		transport := cloneTransportWithTLSPreference(&http.Transport{
 			MaxIdleConns:        common.RelayMaxIdleConns,
 			MaxIdleConnsPerHost: common.RelayMaxIdleConnsPerHost,
 			ForceAttemptHTTP2:   true,
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 				return dialer.Dial(network, addr)
 			},
-		}
-		if common.TLSInsecureSkipVerify {
-			transport.TLSClientConfig = common.InsecureTLSConfig
-		}
+		}, skipTLSVerify)
 
 		client := &http.Client{Transport: transport, CheckRedirect: checkRedirect}
 		client.Timeout = time.Duration(common.RelayTimeout) * time.Second
 		proxyClientLock.Lock()
-		proxyClients[proxyURL] = client
+		proxyClients[cacheKey] = client
 		proxyClientLock.Unlock()
 		return client, nil
 
