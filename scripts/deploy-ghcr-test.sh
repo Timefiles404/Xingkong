@@ -4,6 +4,7 @@ set -euo pipefail
 IMAGE_NAME="${IMAGE_NAME:-ghcr.io/timefiles404/xingkong:latest}"
 CONTAINER_NAME="${CONTAINER_NAME:-newapi-ghcr-test}"
 HOST_PORT="${HOST_PORT:-13000}"
+BIND_ADDR="${BIND_ADDR:-127.0.0.1}"
 NETWORK_NAME="${NETWORK_NAME:-1panel-network}"
 SQL_DSN="${SQL_DSN:-postgresql://user_rmzsQn:password_bDWewb@postgresql:5432/mynewapi}"
 REDIS_CONN_STRING="${REDIS_CONN_STRING:-redis://:redis_XTyhsG@redis:6379}"
@@ -17,7 +18,7 @@ docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
 docker run -d \
   --name "$CONTAINER_NAME" \
   --network "$NETWORK_NAME" \
-  -p "127.0.0.1:${HOST_PORT}:3000" \
+  -p "${BIND_ADDR}:${HOST_PORT}:3000" \
   -v /opt/new-api/test-data:/data \
   -v /opt/new-api/test-logs:/app/logs \
   -e "SQL_DSN=${SQL_DSN}" \
