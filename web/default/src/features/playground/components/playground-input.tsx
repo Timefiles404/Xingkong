@@ -11,7 +11,6 @@ import {
   BrainCircuitIcon,
   SendIcon,
   SquareIcon,
-  SettingsIcon,
 } from 'lucide-react'
 import type { FileUIPart } from 'ai'
 import { useTranslation } from 'react-i18next'
@@ -71,7 +70,6 @@ interface PlaygroundInputProps {
   onGroupChange: (value: string) => void
   groupLabel?: string
   contextUsage?: AgentContextUsage
-  onOpenAgentSettings?: () => void
   agentMode?: boolean
 }
 
@@ -738,7 +736,6 @@ export function PlaygroundInput({
   onGroupChange,
   groupLabel,
   contextUsage,
-  onOpenAgentSettings,
   agentMode = false,
 }: PlaygroundInputProps) {
   const { t } = useTranslation()
@@ -824,18 +821,6 @@ export function PlaygroundInput({
               }
               groupLabel={groupLabel}
             />
-
-            {agentMode && (
-              <PromptInputButton
-                className='!rounded-full border font-medium'
-                onClick={onOpenAgentSettings}
-                type='button'
-                variant='outline'
-              >
-                <SettingsIcon size={16} />
-                <span className='hidden sm:inline'>{t('Agent 设置')}</span>
-              </PromptInputButton>
-            )}
 
             {showOpenAIControls && (
               <OpenAIRequestControls

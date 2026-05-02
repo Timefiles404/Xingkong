@@ -8,6 +8,7 @@ import {
   FolderOpenIcon,
   MessageCircleIcon,
   PlayIcon,
+  SettingsIcon,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -2745,7 +2746,6 @@ export function Playground() {
           onModelChange={(value) =>
             isAgentMode ? handleAgentModelChange(value) : updateConfig('model', value)
           }
-          onOpenAgentSettings={() => setIsAgentSettingsOpen(true)}
           reasoningEffort={config.openaiReasoningEffort}
           onReasoningEffortChange={(value) =>
             updateConfig('openaiReasoningEffort', value)
@@ -2760,6 +2760,19 @@ export function Playground() {
           agentMode={isAgentMode}
         />
       </div>
+
+      {isAgentMode && (
+        <Button
+          className='absolute right-4 bottom-28 z-30 rounded-full shadow-sm'
+          onClick={() => setIsAgentSettingsOpen(true)}
+          size='icon'
+          type='button'
+          variant='outline'
+        >
+          <SettingsIcon className='size-4' />
+          <span className='sr-only'>{t('Agent 设置')}</span>
+        </Button>
+      )}
 
       <PlaygroundAgentSettingsDialog
         open={isAgentSettingsOpen}
