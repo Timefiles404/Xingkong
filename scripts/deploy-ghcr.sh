@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [ "${CONFIRM_PRODUCTION_DEPLOY:-}" != "yes" ]; then
+  echo "This script recreates the production app container." >&2
+  echo "Set CONFIRM_PRODUCTION_DEPLOY=yes to continue." >&2
+  exit 2
+fi
+
 COMPOSE_FILE="${COMPOSE_FILE:-/opt/1panel/docker/compose/newapi/docker-compose.yml}"
 IMAGE_NAME="${IMAGE_NAME:-ghcr.io/timefiles404/xingkong:latest}"
 APP_SERVICE="${APP_SERVICE:-app}"
