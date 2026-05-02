@@ -73,6 +73,7 @@ networks:
 """
 path.write_text(content)
 PY
+docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
 docker compose -f "$TEST_COMPOSE_FILE" up -d --force-recreate app >/dev/null
 
 echo "[3/4] waiting for test app"
