@@ -486,7 +486,10 @@ export function PlaygroundChat({
                                   {showAgentContextEvent && (
                                     <div className='my-4 flex items-center gap-3 text-xs text-muted-foreground'>
                                       <div className='h-px flex-1 bg-border' />
-                                      <div className='flex items-center gap-2 rounded-full border bg-background px-3 py-1 shadow-xs'>
+                                      <div
+                                        className='flex items-center gap-2 rounded-full border bg-background px-3 py-1 shadow-xs'
+                                        title={message.apiContent || undefined}
+                                      >
                                         {message.status === 'loading' && (
                                           <Loader />
                                         )}

@@ -216,10 +216,12 @@ function buildAgentPromptCacheKey(
 
 function createAgentContextEventMessage(
   content: string,
-  status: MessageType['status'] = 'complete'
+  status: MessageType['status'] = 'complete',
+  tooltip?: string
 ): MessageType {
   return {
     ...createLoadingAssistantMessage(),
+    apiContent: tooltip,
     isAgentContextEvent: true,
     status,
     versions: [createMessageVersion(content)],
@@ -287,6 +289,18 @@ function buildAgentSummaryPrompt(
     '需要压缩的旧对话:',
     transcript || '(empty)',
   ].join('\n')
+}
+
+function getCompactionSourceCharCount(
+  previousSummary: string | undefined,
+  compactedMessages: MessageType[]
+): number {
+  const previousLength = previousSummary?.length || 0
+  const compactedLength = compactedMessages
+    .map(getMessageCompactionText)
+    .filter(Boolean)
+    .join('\n\n---\n\n').length
+  return previousLength + compactedLength
 }
 
 function extractExternalResponsesText(payload: unknown): string {
@@ -2314,6 +2328,10 @@ export function Playground() {
       setIsAgentCompacting(true)
       let summary = plan.localSummary || ''
       let usedFallback = false
+      const beforeChars = getCompactionSourceCharCount(
+        plan.previousSummary,
+        plan.compactedMessages
+      )
       try {
         const prompt = buildAgentSummaryPrompt(
           plan.previousSummary,
@@ -2340,9 +2358,14 @@ export function Playground() {
         currentAgentSettings.context,
         summary.length ? Math.ceil(summary.length / 4) : 0
       )
+      const afterChars = summary.length
       const divider = createAgentContextEventMessage(
         usedFallback ? t('上下文已压缩，本轮使用本地兜底摘要') : t('上下文已压缩'),
-        'complete'
+        'complete',
+        t('从 {{before}} 字符 -> {{after}} 字符', {
+          before: beforeChars.toLocaleString(),
+          after: afterChars.toLocaleString(),
+        })
       )
       nextMessages = statusMessageKey
         ? nextMessages.map((message) =>
