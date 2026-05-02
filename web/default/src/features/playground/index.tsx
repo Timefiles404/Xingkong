@@ -661,12 +661,15 @@ function parseResponsesToolCallItem(
     id: item.call_id || item.id,
     tool,
     path: stringArg(args.path) || '.',
+    cwd: stringArg(args.cwd),
+    command: stringArg(args.command),
     content: stringArg(args.content),
     query: stringArg(args.query),
     start: numberArg(args.start),
     end: numberArg(args.end),
     maxBytes: numberArg(args.maxBytes),
     maxResults: numberArg(args.maxResults),
+    timeoutMs: numberArg(args.timeoutMs) || numberArg(args.timeout_ms),
     edits,
   }
 }

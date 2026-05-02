@@ -80,7 +80,7 @@ export interface WorkspaceEntry {
 }
 
 const MAX_READ_BYTES = 1024 * 1024
-const MAX_TOOL_CALLS = 8
+const MAX_TOOL_CALLS = 30
 const MAX_SEARCH_FILES = 300
 const MAX_SEARCH_RESULTS = 50
 const SEARCH_READ_BYTES = 512 * 1024
