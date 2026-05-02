@@ -163,9 +163,9 @@ export function UpdateCheckerSection({
       </SettingsSection>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className='max-h-[80vh] overflow-y-auto'>
+        <DialogContent className='max-h-[82vh] w-[min(92vw,960px)] max-w-[92vw] overflow-y-auto sm:max-w-[960px]'>
           <DialogHeader>
-            <DialogTitle>
+            <DialogTitle className='break-words'>
               {release?.tag_name
                 ? t('New version available: {{version}}', {
                     version: release.tag_name,
@@ -186,16 +186,16 @@ export function UpdateCheckerSection({
           <div className='space-y-4'>
             {updateInfo && (
               <Alert>
-                <AlertDescription className='space-y-1 text-sm'>
-                  <div>
+                <AlertDescription className='space-y-1 text-sm break-words'>
+                  <div className='min-w-0 break-all'>
                     {t('Update source')}: {updateInfo.repository}
                   </div>
-                  <div>
+                  <div className='min-w-0 break-all'>
                     {t('Target image')}: {updateInfo.image}
                   </div>
                   {!updateInfo.can_auto_update &&
                     updateInfo.auto_update_hint && (
-                      <div className='text-destructive'>
+                      <div className='text-destructive min-w-0 whitespace-normal break-words'>
                         {t('Auto update unavailable')}:{' '}
                         {updateInfo.auto_update_hint}
                       </div>
@@ -204,7 +204,9 @@ export function UpdateCheckerSection({
               </Alert>
             )}
             {release?.body ? (
-              <Markdown>{release.body}</Markdown>
+              <div className='min-w-0 break-words [&_*]:max-w-full [&_a]:break-all [&_code]:whitespace-pre-wrap [&_pre]:overflow-x-auto'>
+                <Markdown>{release.body}</Markdown>
+              </div>
             ) : (
               <p className='text-muted-foreground text-sm'>
                 {t('No release notes provided.')}
