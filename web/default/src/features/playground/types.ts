@@ -261,10 +261,14 @@ export type OpenAIReasoningEffort =
   | 'high'
   | 'xhigh'
 
+export type OpenAIRequestMode = 'standard' | 'fast' | 'compatible'
+
 export interface PlaygroundConfig {
   model: string
   group: string
   openaiReasoningEffort: OpenAIReasoningEffort
+  openaiRequestMode: OpenAIRequestMode
+  /** @deprecated use openaiRequestMode instead. Kept for old localStorage data. */
   openaiFastMode: boolean
   temperature: number
   top_p: number

@@ -14,28 +14,49 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '@/lib/utils'
 import {
   formatFileReference,
+  listHelperWorkspaceEntries,
   listWorkspaceEntries,
+  isAgentHelperPaired,
+  type AgentHelperStatus,
   type WorkspaceEntry,
 } from '../lib'
 
 interface PlaygroundFileSidebarProps {
   root?: FileSystemDirectoryHandle
+  helperStatus?: AgentHelperStatus | null
   workspaceName?: string
   disabled?: boolean
+  refreshKey?: number
 }
 
 interface FileTreeNodeProps {
   entry: WorkspaceEntry
   depth: number
-  root: FileSystemDirectoryHandle
+  root?: FileSystemDirectoryHandle
+  helperStatus?: AgentHelperStatus | null
   disabled?: boolean
+  refreshKey?: number
+}
+
+async function listEntries(
+  root: FileSystemDirectoryHandle | undefined,
+  helperStatus: AgentHelperStatus | null | undefined,
+  path: string
+): Promise<WorkspaceEntry[]> {
+  if (isAgentHelperPaired(helperStatus)) {
+    return listHelperWorkspaceEntries(path)
+  }
+  if (!root) return []
+  return listWorkspaceEntries(root, path)
 }
 
 function FileTreeNode({
   entry,
   depth,
   root,
+  helperStatus,
   disabled = false,
+  refreshKey = 0,
 }: FileTreeNodeProps) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
@@ -47,14 +68,37 @@ function FileTreeNode({
     if (!isDirectory || children) return
     setLoading(true)
     try {
-      setChildren(await listWorkspaceEntries(root, entry.path))
+      setChildren(await listEntries(root, helperStatus, entry.path))
     } catch {
       toast.error(t('Failed to read folder'))
       setChildren([])
     } finally {
       setLoading(false)
     }
-  }, [children, entry.path, isDirectory, root, t])
+  }, [children, entry.path, helperStatus, isDirectory, root, t])
+
+  useEffect(() => {
+    if (!open || !isDirectory) return
+    let cancelled = false
+    setLoading(true)
+    listEntries(root, helperStatus, entry.path)
+      .then((nextChildren) => {
+        if (!cancelled) setChildren(nextChildren)
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setChildren([])
+          toast.error(t('Failed to read folder'))
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [entry.path, helperStatus, isDirectory, open, refreshKey, root, t])
 
   const toggle = async () => {
     if (!isDirectory) return
@@ -143,7 +187,9 @@ function FileTreeNode({
               disabled={disabled}
               entry={child}
               key={child.path}
+              refreshKey={refreshKey}
               root={root}
+              helperStatus={helperStatus}
             />
           ))}
         </div>
@@ -154,8 +200,10 @@ function FileTreeNode({
 
 export function PlaygroundFileSidebar({
   root,
+  helperStatus,
   workspaceName,
   disabled = false,
+  refreshKey = 0,
 }: PlaygroundFileSidebarProps) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(true)
@@ -163,14 +211,14 @@ export function PlaygroundFileSidebar({
   const [entries, setEntries] = useState<WorkspaceEntry[]>([])
 
   useEffect(() => {
-    if (!root) {
+    if (!root && !isAgentHelperPaired(helperStatus)) {
       setEntries([])
       return
     }
 
     let cancelled = false
     setLoading(true)
-    listWorkspaceEntries(root, '.')
+    listEntries(root, helperStatus, '.')
       .then((nextEntries) => {
         if (!cancelled) setEntries(nextEntries)
       })
@@ -187,14 +235,14 @@ export function PlaygroundFileSidebar({
     return () => {
       cancelled = true
     }
-  }, [root, t])
+  }, [helperStatus, refreshKey, root, t])
 
   const title = useMemo(
-    () => workspaceName || root?.name || t('Workspace files'),
-    [root?.name, t, workspaceName]
+    () => workspaceName || root?.name || helperStatus?.workspace || t('Workspace files'),
+    [helperStatus?.workspace, root?.name, t, workspaceName]
   )
 
-  if (!root) return null
+  if (!root && !isAgentHelperPaired(helperStatus)) return null
 
   return (
     <div className='pointer-events-none absolute inset-y-0 left-0 z-20 hidden pl-4 lg:flex'>
@@ -246,6 +294,7 @@ export function PlaygroundFileSidebar({
                       disabled={disabled}
                       entry={entry}
                       key={entry.path}
+                      refreshKey={refreshKey}
                       root={root}
                     />
                   ))
