@@ -14,11 +14,20 @@ import { toast } from 'sonner'
 import { SSE } from 'sse.js'
 import { Button } from '@/components/ui/button'
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { Input } from '@/components/ui/input'
 import { getCommonHeaders } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { getUserModels, getUserGroups } from './api'
@@ -42,7 +51,6 @@ import {
   finalizeMessage,
   formatMessageForAPI,
   formatAgentToolResults,
-  generateAgentHelperPairCode,
   getCompleteAgentToolBlockEnd,
   getAgentHelperDownloadTarget,
   isAgentHelperPaired,
@@ -1207,7 +1215,8 @@ export function Playground() {
     useState<AgentHelperStatus | null>(null)
   const [isHelperDownloading, setIsHelperDownloading] = useState(false)
   const [isHelperPairing, setIsHelperPairing] = useState(false)
-  const [helperPairCode, setHelperPairCode] = useState('')
+  const [isHelperPairDialogOpen, setIsHelperPairDialogOpen] = useState(false)
+  const [helperPairCodeInput, setHelperPairCodeInput] = useState('')
   const [helperManualCommand, setHelperManualCommand] = useState('')
   const [workspaceRefreshKey, setWorkspaceRefreshKey] = useState(0)
   const [isAgentRunning, setIsAgentRunning] = useState(false)
@@ -1353,9 +1362,7 @@ export function Playground() {
       toast.success(
         t('Helper downloaded to workspace: {{fileName}}', { fileName })
       )
-      const code = helperPairCode || generateAgentHelperPairCode()
-      setHelperPairCode(code)
-      setHelperManualCommand(buildAgentHelperManualCommand(fileName, code))
+      setHelperManualCommand(buildAgentHelperManualCommand(fileName))
       toast.info(t('Helper downloaded. Start it from the helper menu.'))
     } catch (error) {
       toast.error(
@@ -1364,7 +1371,7 @@ export function Playground() {
     } finally {
       setIsHelperDownloading(false)
     }
-  }, [ensureWorkspaceForHelper, helperPairCode, t])
+  }, [ensureWorkspaceForHelper, t])
 
   const refreshAgentHelperStatus = useCallback(async () => {
     const status = await checkAgentHelperStatus(2500)
@@ -1382,8 +1389,9 @@ export function Playground() {
         setAgentHelperStatus(status)
         if (isAgentHelperPaired(status)) {
           toast.success(t('Helper paired'))
-          setHelperPairCode('')
+          setHelperPairCodeInput('')
           setHelperManualCommand('')
+          setIsHelperPairDialogOpen(false)
         } else {
           toast.info(t('Helper is reachable but not paired yet'))
         }
@@ -1403,20 +1411,22 @@ export function Playground() {
     if (!workspace) return
 
     const target = getAgentHelperDownloadTarget()
-    const code = generateAgentHelperPairCode()
-    setHelperPairCode(code)
-    setHelperManualCommand(buildAgentHelperManualCommand(target.fileName, code))
-    launchAgentHelperProtocol(code)
+    setHelperManualCommand(buildAgentHelperManualCommand(target.fileName))
+    launchAgentHelperProtocol()
 
     window.setTimeout(async () => {
       const status = await refreshAgentHelperStatus()
       if (status) {
-        await handlePairHelper(code)
+        if (isAgentHelperPaired(status)) return
+        setIsHelperPairDialogOpen(true)
         return
       }
-      toast.info(t('Helper launch failed. Use the pairing code below.'))
+      setIsHelperPairDialogOpen(true)
+      toast.info(
+        t('Helper launch failed. Start helper manually and enter the pairing code.')
+      )
     }, 2000)
-  }, [ensureWorkspaceForHelper, handlePairHelper, refreshAgentHelperStatus, t])
+  }, [ensureWorkspaceForHelper, refreshAgentHelperStatus, t])
 
   const handleCopyManualHelperCommand = useCallback(async () => {
     if (!helperManualCommand || !navigator?.clipboard?.writeText) return
@@ -2105,50 +2115,15 @@ export function Playground() {
                         <PlayIcon className='mr-2 size-4' />
                         {t('Start helper')}
                       </DropdownMenuItem>
-                      {helperPairCode && (
-                        <DropdownMenuItem
-                          disabled={isHelperPairing}
-                          onClick={() => void handlePairHelper(helperPairCode)}
-                        >
-                          <BotIcon className='mr-2 size-4' />
-                          {isHelperPairing ? t('Pairing helper') : t('Pair helper')}
-                        </DropdownMenuItem>
-                      )}
+                      <DropdownMenuItem
+                        disabled={isHelperPairing}
+                        onClick={() => setIsHelperPairDialogOpen(true)}
+                      >
+                        <BotIcon className='mr-2 size-4' />
+                        {t('Pair helper')}
+                      </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
-                )}
-              </div>
-            )}
-            {isAgentMode && helperPairCode && !isHelperConnected && (
-              <div className='bg-background/80 flex flex-col gap-2 rounded-xl border px-3 py-2 text-xs sm:col-span-2'>
-                <div className='flex flex-wrap items-center gap-2'>
-                  <span className='text-muted-foreground'>
-                    {t('Helper pairing code')}
-                  </span>
-                  <code className='rounded-md bg-muted px-2 py-1 font-mono text-sm'>
-                    {helperPairCode}
-                  </code>
-                  <Button
-                    disabled={isHelperPairing}
-                    onClick={() => void handlePairHelper(helperPairCode)}
-                    size='sm'
-                    type='button'
-                    variant='secondary'
-                  >
-                    {isHelperPairing ? t('Pairing helper') : t('Pair helper')}
-                  </Button>
-                </div>
-                {helperManualCommand && (
-                  <button
-                    className='text-muted-foreground flex min-w-0 items-center gap-2 text-left hover:text-foreground'
-                    onClick={() => void handleCopyManualHelperCommand()}
-                    type='button'
-                  >
-                    <CopyIcon className='size-3.5 shrink-0' />
-                    <span className='truncate'>
-                      {t('Manual start command')}: {helperManualCommand}
-                    </span>
-                  </button>
                 )}
               </div>
             )}
@@ -2196,6 +2171,67 @@ export function Playground() {
           agentMode={isAgentMode}
         />
       </div>
+
+      <Dialog
+        open={isHelperPairDialogOpen && !isHelperConnected}
+        onOpenChange={setIsHelperPairDialogOpen}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t('Pair local helper')}</DialogTitle>
+            <DialogDescription>
+              {t(
+                'Enter the pairing code printed in the local helper window. The web page never generates this code.'
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <div className='space-y-3'>
+            <Input
+              autoFocus
+              inputMode='numeric'
+              maxLength={16}
+              onChange={(event) =>
+                setHelperPairCodeInput(event.target.value.replace(/\s+/g, ''))
+              }
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  void handlePairHelper(helperPairCodeInput)
+                }
+              }}
+              placeholder={t('Helper pairing code')}
+              value={helperPairCodeInput}
+            />
+            {helperManualCommand && (
+              <button
+                className='text-muted-foreground flex min-w-0 items-center gap-2 text-left text-xs hover:text-foreground'
+                onClick={() => void handleCopyManualHelperCommand()}
+                type='button'
+              >
+                <CopyIcon className='size-3.5 shrink-0' />
+                <span className='truncate'>
+                  {t('Manual start command')}: {helperManualCommand}
+                </span>
+              </button>
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              onClick={() => setIsHelperPairDialogOpen(false)}
+              type='button'
+              variant='outline'
+            >
+              {t('Cancel')}
+            </Button>
+            <Button
+              disabled={isHelperPairing || !helperPairCodeInput.trim()}
+              onClick={() => void handlePairHelper(helperPairCodeInput)}
+              type='button'
+            >
+              {isHelperPairing ? t('Pairing helper') : t('Pair helper')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

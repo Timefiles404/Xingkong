@@ -167,12 +167,6 @@ export function isAgentHelperPaired(status: AgentHelperStatus | null): boolean {
   return !status.pairing_required || status.paired === true
 }
 
-export function generateAgentHelperPairCode(): string {
-  const bytes = new Uint8Array(8)
-  globalThis.crypto?.getRandomValues?.(bytes)
-  return Array.from(bytes, (value) => `${value % 10}`).join('')
-}
-
 export function getStoredAgentHelperToken(): string {
   try {
     return window.localStorage.getItem(AGENT_HELPER_TOKEN_STORAGE_KEY) || ''
@@ -284,21 +278,15 @@ export async function downloadAgentHelperToWorkspace(
   return helper.fileName
 }
 
-export function launchAgentHelperProtocol(pairCode?: string): void {
-  const url = pairCode
-    ? `${AGENT_HELPER_PROTOCOL_URL}?pair_code=${encodeURIComponent(pairCode)}`
-    : AGENT_HELPER_PROTOCOL_URL
-  window.location.href = url
+export function launchAgentHelperProtocol(): void {
+  window.location.href = AGENT_HELPER_PROTOCOL_URL
 }
 
-export function buildAgentHelperManualCommand(
-  helperFileName: string,
-  pairCode: string
-): string {
+export function buildAgentHelperManualCommand(helperFileName: string): string {
   if (helperFileName.endsWith('.exe')) {
-    return `${helperFileName} --pair-code ${pairCode}`
+    return helperFileName
   }
-  return `./${helperFileName} --pair-code ${pairCode}`
+  return `./${helperFileName}`
 }
 
 export function parseAgentToolCalls(content: string): AgentToolCall[] {
