@@ -4234,6 +4234,11 @@
     "Helper connected": "Helper 已连接",
     "Helper workspace warning": "Helper 工作目录异常",
     "Helper offline": "Helper 未连接",
+    "Download or start helper": "下载/启动 Helper",
+    "Downloading helper": "正在下载 Helper",
+    "Helper downloaded to workspace: {{fileName}}": "Helper 已下载到工作目录：{{fileName}}",
+    "If helper is not started, run it once from the selected folder": "如果 Helper 仍未启动，请在已选择的文件夹里手动运行一次",
+    "Failed to download helper": "下载 Helper 失败",
     "{{error}}，正在重连（{{attempt}}/{{max}}）...": "{{error}}，正在重连（{{attempt}}/{{max}}）...",
     "Generation was interrupted": "生成已停止"
   }

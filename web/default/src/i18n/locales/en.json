@@ -4234,6 +4234,11 @@
     "Helper connected": "Helper connected",
     "Helper workspace warning": "Helper workspace warning",
     "Helper offline": "Helper offline",
+    "Download or start helper": "Download/start helper",
+    "Downloading helper": "Downloading helper",
+    "Helper downloaded to workspace: {{fileName}}": "Helper downloaded to workspace: {{fileName}}",
+    "If helper is not started, run it once from the selected folder": "If helper is not started, run it once from the selected folder",
+    "Failed to download helper": "Failed to download helper",
     "{{error}}，正在重连（{{attempt}}/{{max}}）...": "{{error}}, reconnecting ({{attempt}}/{{max}})...",
     "Generation was interrupted": "Generation was interrupted"
   }

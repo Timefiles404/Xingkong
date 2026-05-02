@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { BotIcon, FolderOpenIcon, MessageCircleIcon } from 'lucide-react'
+import {
+  BotIcon,
+  DownloadIcon,
+  FolderOpenIcon,
+  MessageCircleIcon,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { SSE } from 'sse.js'
@@ -22,15 +27,18 @@ import {
   createMessageVersion,
   createUserMessage,
   createLoadingAssistantMessage,
+  downloadAgentHelperToWorkspace,
   executeAgentToolCalls,
   finalizeMessage,
   formatMessageForAPI,
   formatAgentToolResults,
   getCompleteAgentToolBlockEnd,
+  getAgentHelperDownloadTarget,
   getVisibleAgentContent,
   isOpenAIReasoningModel,
   isValidMessage,
   isFileSystemAccessSupported,
+  launchAgentHelperProtocol,
   parseAgentToolCalls,
   requestWorkspaceDirectory,
   requiresAgentToolApproval,
@@ -1173,6 +1181,7 @@ export function Playground() {
   >({})
   const [agentHelperStatus, setAgentHelperStatus] =
     useState<AgentHelperStatus | null>(null)
+  const [isHelperDownloading, setIsHelperDownloading] = useState(false)
   const [isAgentRunning, setIsAgentRunning] = useState(false)
   const pendingAgentApprovalsRef = useRef<
     Map<string, (approved: boolean) => void>
@@ -1290,6 +1299,37 @@ export function Playground() {
       return null
     }
   }, [activeConversationId, t, updateActiveConversationMeta])
+
+  const handleInstallOrLaunchHelper = useCallback(async () => {
+    let workspace = activeWorkspaceHandle
+    if (!workspace) {
+      workspace = await pickWorkspace()
+    }
+    if (!workspace) return
+
+    const target = getAgentHelperDownloadTarget()
+    setIsHelperDownloading(true)
+    try {
+      const fileName = await downloadAgentHelperToWorkspace(workspace, target)
+      toast.success(
+        t('Helper downloaded to workspace: {{fileName}}', { fileName })
+      )
+      launchAgentHelperProtocol()
+      window.setTimeout(async () => {
+        const status = await checkAgentHelperStatus(2500)
+        setAgentHelperStatus(status)
+        if (!status) {
+          toast.info(t('If helper is not started, run it once from the selected folder'))
+        }
+      }, 2000)
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : t('Failed to download helper')
+      )
+    } finally {
+      setIsHelperDownloading(false)
+    }
+  }, [activeWorkspaceHandle, pickWorkspace, t])
 
   const handleModeChange = useCallback(
     (nextMode: PlaygroundMode) => {
@@ -1928,6 +1968,20 @@ export function Playground() {
                     ? t('Change folder')
                     : t('Select folder')}
                 </Button>
+                {!agentHelperStatus && (
+                  <Button
+                    disabled={isBusy || isHelperDownloading}
+                    onClick={() => void handleInstallOrLaunchHelper()}
+                    size='sm'
+                    type='button'
+                    variant='outline'
+                  >
+                    <DownloadIcon className='mr-2 size-4' />
+                    {isHelperDownloading
+                      ? t('Downloading helper')
+                      : t('Download or start helper')}
+                  </Button>
+                )}
               </div>
             )}
           </div>

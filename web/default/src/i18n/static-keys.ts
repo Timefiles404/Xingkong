@@ -497,6 +497,11 @@ export const STATIC_I18N_KEYS = [
   'Helper connected',
   'Helper workspace warning',
   'Helper offline',
+  'Download or start helper',
+  'Downloading helper',
+  'Helper downloaded to workspace: {{fileName}}',
+  'If helper is not started, run it once from the selected folder',
+  'Failed to download helper',
   '{{error}}，正在重连（{{attempt}}/{{max}}）...',
   'Generation was interrupted',
 

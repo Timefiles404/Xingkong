@@ -51,6 +51,12 @@ export interface AgentHelperStatus {
   workspace_warning?: string
 }
 
+export interface AgentHelperDownloadTarget {
+  target: string
+  fileName: string
+  label: string
+}
+
 interface AgentHelperExecResponse {
   ok: boolean
   command: string
@@ -79,6 +85,7 @@ const MAX_SEARCH_FILES = 300
 const MAX_SEARCH_RESULTS = 50
 const SEARCH_READ_BYTES = 512 * 1024
 const AGENT_HELPER_BASE_URL = 'http://127.0.0.1:8787'
+const AGENT_HELPER_PROTOCOL_URL = 'xingkong-helper://start'
 
 const SUPPORTED_TOOLS: AgentToolName[] = [
   'list_dir',
@@ -166,6 +173,65 @@ export async function requestWorkspaceDirectory(): Promise<FileSystemDirectoryHa
   }
 
   return picker({ mode: 'readwrite' })
+}
+
+export function getAgentHelperDownloadTarget(): AgentHelperDownloadTarget {
+  const ua = navigator.userAgent.toLowerCase()
+  const platform =
+    (navigator as Navigator & { userAgentData?: { platform?: string } })
+      .userAgentData?.platform?.toLowerCase() || ''
+  const source = `${platform} ${ua}`
+
+  if (source.includes('mac') || source.includes('darwin')) {
+    const isArm = source.includes('arm') || source.includes('apple')
+    return {
+      target: isArm ? 'darwin-arm64' : 'darwin-amd64',
+      fileName: isArm
+        ? 'xingkong-helper-darwin-arm64'
+        : 'xingkong-helper-darwin-amd64',
+      label: isArm ? 'macOS Apple Silicon' : 'macOS Intel',
+    }
+  }
+
+  if (source.includes('linux')) {
+    const isArm = source.includes('aarch64') || source.includes('arm64')
+    return {
+      target: isArm ? 'linux-arm64' : 'linux-amd64',
+      fileName: isArm
+        ? 'xingkong-helper-linux-arm64'
+        : 'xingkong-helper-linux-amd64',
+      label: isArm ? 'Linux ARM64' : 'Linux AMD64',
+    }
+  }
+
+  return {
+    target: 'windows-amd64',
+    fileName: 'xingkong-helper-windows-amd64.exe',
+    label: 'Windows AMD64',
+  }
+}
+
+export async function downloadAgentHelperToWorkspace(
+  root: FileSystemDirectoryHandle,
+  helper: AgentHelperDownloadTarget
+): Promise<string> {
+  const response = await fetch(`/api/helper/download/${helper.target}`)
+  if (!response.ok) {
+    throw new Error(`helper_download_http_${response.status}`)
+  }
+  const blob = await response.blob()
+  if (blob.size === 0) {
+    throw new Error('helper_download_empty')
+  }
+  const fileHandle = await root.getFileHandle(helper.fileName, { create: true })
+  const writable = await fileHandle.createWritable()
+  await writable.write(blob)
+  await writable.close()
+  return helper.fileName
+}
+
+export function launchAgentHelperProtocol(): void {
+  window.location.href = AGENT_HELPER_PROTOCOL_URL
 }
 
 export function parseAgentToolCalls(content: string): AgentToolCall[] {
