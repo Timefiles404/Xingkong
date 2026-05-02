@@ -98,6 +98,7 @@ ensure_list_item(lines, "app", "volumes", "/opt/1panel/docker/compose/newapi/doc
 ensure_list_item(lines, "app", "environment", "XINGKONG_AUTO_UPDATE_COMPOSE_FILE=/host-compose/docker-compose.yml")
 ensure_list_item(lines, "app", "environment", "XINGKONG_AUTO_UPDATE_COMPOSE_HOST_FILE=/opt/1panel/docker/compose/newapi/docker-compose.yml")
 ensure_list_item(lines, "app", "environment", "XINGKONG_AUTO_UPDATE_SERVICE=app")
+ensure_list_item(lines, "app", "environment", "XINGKONG_AUTO_UPDATE_COMPOSE_PROJECT=newapi")
 ensure_list_item(lines, "app", "environment", "XINGKONG_AUTO_UPDATE_IMAGE_REPO=ghcr.io/timefiles404/xingkong")
 
 path.write_text("\n".join(lines) + "\n")

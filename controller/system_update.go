@@ -190,6 +190,7 @@ func performContainerUpdate(targetImage string) error {
 	}
 	composeFile := updateComposeFile()
 	service := updateComposeService()
+	project := updateComposeProject()
 	if err := updateComposeServiceImage(composeFile, service, targetImage); err != nil {
 		return err
 	}
@@ -214,9 +215,11 @@ func performContainerUpdate(targetImage string) error {
 		"TARGET_IMAGE="+targetImage,
 		"-e",
 		"SERVICE="+service,
+		"-e",
+		"COMPOSE_PROJECT="+project,
 		updateHelperImage(targetImage),
 		"-c",
-		`docker pull "$TARGET_IMAGE" && docker compose -f /compose/docker-compose.yml up -d --force-recreate "$SERVICE"`,
+		`docker pull "$TARGET_IMAGE" && docker compose -p "$COMPOSE_PROJECT" -f /compose/docker-compose.yml up -d --force-recreate "$SERVICE"`,
 	); err != nil {
 		return fmt.Errorf("failed to start updater container: %w\n%s", err, output)
 	}
@@ -241,6 +244,21 @@ func updateComposeService() string {
 		return value
 	}
 	return defaultUpdateComposeSvc
+}
+
+func updateComposeProject() string {
+	if value := strings.TrimSpace(os.Getenv("XINGKONG_AUTO_UPDATE_COMPOSE_PROJECT")); value != "" {
+		return value
+	}
+	hostComposeFile := strings.TrimSpace(updateHostComposeFile())
+	if hostComposeFile == "" {
+		return "newapi"
+	}
+	project := filepath.Base(filepath.Dir(hostComposeFile))
+	if project == "." || project == string(filepath.Separator) || project == "" {
+		return "newapi"
+	}
+	return project
 }
 
 func updateHostComposeFile() string {

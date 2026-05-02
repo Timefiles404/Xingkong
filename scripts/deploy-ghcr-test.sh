@@ -63,6 +63,7 @@ content = f"""services:
       - XINGKONG_AUTO_UPDATE_COMPOSE_FILE=/host-compose/docker-compose.yml
       - XINGKONG_AUTO_UPDATE_COMPOSE_HOST_FILE={host_compose}
       - XINGKONG_AUTO_UPDATE_SERVICE=app
+      - XINGKONG_AUTO_UPDATE_COMPOSE_PROJECT={Path(host_compose).parent.name}
       - XINGKONG_AUTO_UPDATE_IMAGE_REPO=ghcr.io/timefiles404/xingkong
     command: ["--log-dir", "/app/logs"]
 
