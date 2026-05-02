@@ -1,4 +1,4 @@
-import type { PlaygroundConversation } from '../types'
+import type { AgentSettings, PlaygroundConversation } from '../types'
 
 export type AgentToolName =
   | 'list_dir'
@@ -85,6 +85,7 @@ interface AgentHelperFSResponse {
 export interface AgentHelperConversationState {
   conversations: PlaygroundConversation[]
   activeConversationId: string | null
+  agentSettings?: AgentSettings
 }
 
 export interface AgentToolRuntime {
@@ -890,6 +891,7 @@ export async function loadHelperAgentConversations(): Promise<AgentHelperConvers
         ? parsed.conversations.filter(Boolean)
         : [],
       activeConversationId: parsed.activeConversationId || null,
+      agentSettings: parsed.agentSettings,
     }
   } catch {
     return { conversations: [], activeConversationId: null }
@@ -905,6 +907,7 @@ export async function saveHelperAgentConversations(
     content: JSON.stringify({
       conversations: state.conversations,
       activeConversationId: state.activeConversationId,
+      agentSettings: state.agentSettings,
       savedAt: Date.now(),
     }),
   })

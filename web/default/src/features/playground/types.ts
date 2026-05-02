@@ -263,6 +263,50 @@ export type OpenAIReasoningEffort =
 
 export type OpenAIRequestMode = 'standard' | 'fast' | 'compatible'
 
+export type AgentProviderKind = 'builtin' | 'external'
+
+export type AgentExternalEndpointType = 'chat_completions' | 'responses'
+
+export interface AgentExternalProvider {
+  id: string
+  name: string
+  baseUrl: string
+  apiKey: string
+  endpointType: AgentExternalEndpointType
+  models: ModelOption[]
+  selectedModel?: string
+}
+
+export interface AgentContextSettings {
+  enabled: boolean
+  contextLimit: number
+  compactThresholdRatio: number
+  tailTurns: number
+  fontSize: number
+  fontFamily: string
+  systemPrompt: string
+}
+
+export interface AgentSettings {
+  providerKind: AgentProviderKind
+  activeExternalProviderId?: string
+  externalProviders: AgentExternalProvider[]
+  context: AgentContextSettings
+}
+
+export interface AgentContextUsage {
+  totalTokens: number
+  limitTokens: number
+  thresholdTokens: number
+  compactedTokens: number
+  userTokens: number
+  assistantTokens: number
+  toolTokens: number
+  systemTokens: number
+  feeUSD: number
+  feeQuota: number
+}
+
 export interface PlaygroundConfig {
   model: string
   group: string
@@ -314,5 +358,9 @@ export interface PlaygroundConversation {
   agentResponsesModel?: string
   agentResponsesWorkspaceName?: string
   agentResponsesStateVersion?: number
+  agentContextSummary?: string
+  agentContextSummaryUpdatedAt?: number
+  agentContextCompactedBeforeKey?: string
+  agentContextUsage?: AgentContextUsage
   messages: Message[]
 }

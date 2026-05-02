@@ -4,12 +4,15 @@ import { DEFAULT_CONFIG, DEFAULT_PARAMETER_ENABLED } from '../constants'
 import {
   loadConfig,
   saveConfig,
+  loadAgentSettings,
+  saveAgentSettings,
   loadParameterEnabled,
   saveParameterEnabled,
   loadConversations,
   saveConversations,
 } from '../lib'
 import type {
+  AgentSettings,
   Message,
   PlaygroundConfig,
   ParameterEnabled,
@@ -72,6 +75,10 @@ export function usePlaygroundState() {
       const saved = loadParameterEnabled()
       return { ...DEFAULT_PARAMETER_ENABLED, ...saved }
     }
+  )
+
+  const [agentSettings, setAgentSettings] = useState<AgentSettings>(() =>
+    loadAgentSettings()
   )
 
   const [conversationState, setConversationState] = useState(() => {
@@ -144,6 +151,17 @@ export function usePlaygroundState() {
       setParameterEnabled((prev) => {
         const updated = { ...prev, [key]: value }
         saveParameterEnabled(updated)
+        return updated
+      })
+    },
+    []
+  )
+
+  const updateAgentSettings = useCallback(
+    (updater: AgentSettings | ((prev: AgentSettings) => AgentSettings)) => {
+      setAgentSettings((prev) => {
+        const updated = typeof updater === 'function' ? updater(prev) : updater
+        saveAgentSettings(updated)
         return updated
       })
     },
@@ -308,6 +326,10 @@ export function usePlaygroundState() {
           | 'agentResponsesModel'
           | 'agentResponsesWorkspaceName'
           | 'agentResponsesStateVersion'
+          | 'agentContextSummary'
+          | 'agentContextSummaryUpdatedAt'
+          | 'agentContextCompactedBeforeKey'
+          | 'agentContextUsage'
         >
       >
     ) => {
@@ -404,6 +426,7 @@ export function usePlaygroundState() {
     // State
     config,
     parameterEnabled,
+    agentSettings,
     messages,
     mode,
     workspaceName,
@@ -420,6 +443,7 @@ export function usePlaygroundState() {
     // Actions
     updateConfig,
     updateParameterEnabled,
+    updateAgentSettings,
     updateMessages,
     clearMessages,
     resetConfig,

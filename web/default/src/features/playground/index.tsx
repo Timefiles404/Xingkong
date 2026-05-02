@@ -30,18 +30,26 @@ import {
 import { Input } from '@/components/ui/input'
 import { getCommonHeaders } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { getUserModels, getUserGroups } from './api'
+import {
+  chargeExternalAgentRequestFee,
+  getUserModels,
+  getUserGroups,
+} from './api'
 import { PlaygroundHistorySidebar } from './components/playground-history-sidebar'
 import { PlaygroundFileSidebar } from './components/playground-file-sidebar'
+import { PlaygroundAgentSettingsDialog } from './components/playground-agent-settings-dialog'
 import { PlaygroundChat } from './components/playground-chat'
 import { PlaygroundInput } from './components/playground-input'
 import { API_ENDPOINTS, DEFAULT_GROUP } from './constants'
 import { usePlaygroundState, useChatHandler } from './hooks'
 import {
   AGENT_SYSTEM_PROMPT,
+  buildModelVisibleAgentMessages,
   buildAgentHelperManualCommand,
   buildAgentToolReviewResults,
   buildChatCompletionPayload,
+  calculateAgentContextUsage,
+  compactAgentConversationIfNeeded,
   checkAgentHelperStatus,
   createMessageVersion,
   createUserMessage,
@@ -77,6 +85,8 @@ import type {
   AgentToolResult,
 } from './lib'
 import type {
+  AgentExternalProvider,
+  AgentSettings,
   Message as MessageType,
   ChatCompletionChunk,
   ChatCompletionRequest,
@@ -143,14 +153,15 @@ const AGENT_TOOL_NAMES = new Set<AgentToolName>([
 
 function createAgentSystemMessage(
   workspaceName: string,
-  helperStatus: AgentHelperStatus | null
+  helperStatus: AgentHelperStatus | null,
+  extraSystemPrompt = ''
 ): MessageType {
   return {
     key: 'agent-system',
     from: 'system',
     versions: [
       createMessageVersion(
-        buildAgentInstructions(workspaceName, false, helperStatus)
+        buildAgentInstructions(workspaceName, false, helperStatus, extraSystemPrompt)
       ),
     ],
   }
@@ -159,14 +170,18 @@ function createAgentSystemMessage(
 function buildAgentInstructions(
   workspaceName: string,
   useNativeResponsesTools: boolean,
-  helperStatus: AgentHelperStatus | null
+  helperStatus: AgentHelperStatus | null,
+  extraSystemPrompt = ''
 ): string {
   const workspaceLine = `当前工作目录: ${workspaceName || '未选择'}`
   const helperLine = helperStatus
     ? `本地 helper: 已连接，命令工作目录 ${helperStatus.workspace}，Shell ${helperStatus.shell}`
     : '本地 helper: 未连接；不要尝试运行终端命令。'
+  const customPrompt = extraSystemPrompt.trim()
+    ? `\n\n用户自定义 Agent 规则:\n${extraSystemPrompt.trim()}`
+    : ''
   if (!useNativeResponsesTools) {
-    return `${AGENT_SYSTEM_PROMPT}\n\n${workspaceLine}\n${helperLine}`
+    return `${AGENT_SYSTEM_PROMPT}\n\n${workspaceLine}\n${helperLine}${customPrompt}`
   }
 
   return `你是运行在浏览器网页端的 Agent。你不能访问服务器文件系统；你只能通过用户已授权的本地工作目录使用文件工具。若本地 helper 已连接，你还可以在用户审批后调用本地命令行工具。
@@ -187,7 +202,7 @@ function buildAgentInstructions(
 - 调用 run_command 时必须填写非空 command；cwd 只表示相对工作目录，不是命令。列目录优先用 list_dir；若用户明确要求命令行列目录，Windows 用 dir，macOS/Linux 用 ls -la。
 
 ${workspaceLine}
-${helperLine}`
+${helperLine}${customPrompt}`
 }
 
 function buildAgentPromptCacheKey(
@@ -472,7 +487,8 @@ function buildAgentResponsesPayload(
   parameterEnabled: ParameterEnabled,
   workspaceName: string,
   conversationId: string | null,
-  helperStatus: AgentHelperStatus | null
+  helperStatus: AgentHelperStatus | null,
+  extraSystemPrompt = ''
 ): ResponsesRequest {
   const input = sanitizeResponsesInputItems(messagesToResponsesInput(messages))
   assertResponsesToolCallPairs(input)
@@ -481,7 +497,12 @@ function buildAgentResponsesPayload(
     model: config.model,
     group: config.group,
     input,
-    instructions: buildAgentInstructions(workspaceName, true, helperStatus),
+    instructions: buildAgentInstructions(
+      workspaceName,
+      true,
+      helperStatus,
+      extraSystemPrompt
+    ),
     stream: true,
     store: false,
     prompt_cache_key: buildAgentPromptCacheKey(conversationId),
@@ -637,6 +658,138 @@ function streamAgentCompletionOnce(
         fail(new Error('agent_stopped'))
         return
       }
+      source.stream()
+    } catch (error) {
+      fail(error)
+    }
+  })
+}
+
+function externalEndpoint(baseUrl: string, endpoint: string): string {
+  return `${baseUrl.trim().replace(/\/+$/, '')}/${endpoint.replace(/^\/+/, '')}`
+}
+
+async function chargeExternalRequestFeeOnce(): Promise<void> {
+  await chargeExternalAgentRequestFee()
+}
+
+function streamExternalAgentChatCompletion(
+  provider: AgentExternalProvider,
+  payload: ChatCompletionRequest,
+  onVisibleContent: (content: string) => void,
+  onReconnect: (error: string, attempt: number, maxAttempts: number) => void,
+  control: AgentStreamControl
+): Promise<string> {
+  let retryCount = 0
+
+  const run = async (): Promise<string> => {
+    try {
+      await chargeExternalRequestFeeOnce()
+      return await streamExternalAgentChatCompletionOnce(
+        provider,
+        payload,
+        onVisibleContent,
+        control
+      )
+    } catch (error) {
+      if (control.stopped) throw error
+      if (retryCount >= MAX_STREAM_RETRIES) throw error
+      retryCount += 1
+      const delayMs =
+        STREAM_RETRY_DELAYS[retryCount - 1] ||
+        STREAM_RETRY_DELAYS[STREAM_RETRY_DELAYS.length - 1]
+      onReconnect(
+        error instanceof Error ? error.message : 'external_stream_error',
+        retryCount,
+        MAX_STREAM_RETRIES
+      )
+      await new Promise<void>((resolve, reject) => {
+        control.retryTimer = setTimeout(() => {
+          control.retryTimer = null
+          if (control.stopped) reject(new Error('agent_stopped'))
+          else resolve()
+        }, delayMs)
+      })
+      return run()
+    }
+  }
+
+  return run()
+}
+
+function streamExternalAgentChatCompletionOnce(
+  provider: AgentExternalProvider,
+  payload: ChatCompletionRequest,
+  onVisibleContent: (content: string) => void,
+  control: AgentStreamControl
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let rawContent = ''
+    let settled = false
+    const externalPayload = {
+      ...payload,
+      model: provider.selectedModel || payload.model,
+      stream: true,
+    } as Record<string, unknown>
+    delete externalPayload.group
+    delete externalPayload.prompt_cache_key
+    const source = new SSE(externalEndpoint(provider.baseUrl, '/chat/completions'), {
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${provider.apiKey}`,
+      },
+      method: 'POST',
+      payload: JSON.stringify(externalPayload),
+    })
+    control.source = source
+
+    const close = () => {
+      source.close()
+      if (control.source === source) control.source = null
+    }
+    const finish = (content: string) => {
+      if (settled) return
+      settled = true
+      close()
+      resolve(content)
+    }
+    const fail = (error: unknown) => {
+      if (settled) return
+      settled = true
+      close()
+      reject(error)
+    }
+
+    source.addEventListener('message', (event: MessageEvent) => {
+      if (settled || control.stopped) return
+      if (event.data === '[DONE]') {
+        finish(rawContent)
+        return
+      }
+      try {
+        const chunk: ChatCompletionChunk = JSON.parse(event.data)
+        const content = chunk.choices?.[0]?.delta?.content
+        if (content) {
+          rawContent += content
+          const toolBlockEnd = getCompleteAgentToolBlockEnd(rawContent)
+          if (toolBlockEnd !== null) {
+            rawContent = rawContent.slice(0, toolBlockEnd)
+            onVisibleContent(getAgentStreamDisplayContent(rawContent))
+            finish(rawContent)
+            return
+          }
+          onVisibleContent(getAgentStreamDisplayContent(rawContent))
+        }
+      } catch (error) {
+        fail(error)
+      }
+    })
+    source.addEventListener('error', (event: Event & { data?: string }) => {
+      if (settled || control.stopped) return
+      fail(new Error(event.data || 'external_stream_error'))
+    })
+
+    try {
       source.stream()
     } catch (error) {
       fail(error)
@@ -903,7 +1056,12 @@ function streamAgentResponsesCompletion(
   payload: ResponsesRequest,
   onVisibleContent: (content: string) => void,
   onReconnect: (error: string, attempt: number, maxAttempts: number) => void,
-  control: AgentStreamControl
+  control: AgentStreamControl,
+  options: {
+    endpoint?: string
+    headers?: Record<string, string>
+    chargeBeforeRequest?: () => Promise<void>
+  } = {}
 ): Promise<{
   rawContent: string
   nativeToolCalls: AgentToolCall[]
@@ -917,10 +1075,14 @@ function streamAgentResponsesCompletion(
     nativeOutputItems: ResponsesOutputHistoryItem[]
   }> => {
     try {
+      if (options.chargeBeforeRequest) {
+        await options.chargeBeforeRequest()
+      }
       return await streamAgentResponsesCompletionOnce(
         payload,
         onVisibleContent,
-        control
+        control,
+        options
       )
     } catch (error) {
       if (control.stopped) throw error
@@ -958,7 +1120,11 @@ function streamAgentResponsesCompletion(
 function streamAgentResponsesCompletionOnce(
   payload: ResponsesRequest,
   onVisibleContent: (content: string) => void,
-  control: AgentStreamControl
+  control: AgentStreamControl,
+  options: {
+    endpoint?: string
+    headers?: Record<string, string>
+  } = {}
 ): Promise<{
   rawContent: string
   nativeToolCalls: AgentToolCall[]
@@ -1124,9 +1290,9 @@ function streamAgentResponsesCompletionOnce(
       }
 
       try {
-        const response = await fetch(API_ENDPOINTS.RESPONSES, {
+        const response = await fetch(options.endpoint || API_ENDPOINTS.RESPONSES, {
           method: 'POST',
-          headers: getCommonHeaders(),
+          headers: options.headers || getCommonHeaders(),
           body: JSON.stringify(payload),
           signal: abortController.signal,
         })
@@ -1203,6 +1369,7 @@ export function Playground() {
   const {
     config,
     parameterEnabled,
+    agentSettings,
     messages,
     mode,
     workspaceName,
@@ -1210,10 +1377,12 @@ export function Playground() {
     groups,
     conversations,
     activeConversationId,
+    activeConversation,
     updateMessages,
     setModels,
     setGroups,
     updateConfig,
+    updateAgentSettings,
     createNewConversation,
     switchConversation,
     switchMode,
@@ -1233,6 +1402,7 @@ export function Playground() {
   const [helperPairCodeInput, setHelperPairCodeInput] = useState('')
   const [helperManualCommand, setHelperManualCommand] = useState('')
   const [workspaceRefreshKey, setWorkspaceRefreshKey] = useState(0)
+  const [isAgentSettingsOpen, setIsAgentSettingsOpen] = useState(false)
   const [helperHistoryReady, setHelperHistoryReady] = useState(false)
   const [helperHistorySupported, setHelperHistorySupported] = useState(true)
   const lastSavedHelperHistoryRef = useRef('')
@@ -1265,6 +1435,41 @@ export function Playground() {
   const visibleConversations = conversations.filter(
     (conversation) => (conversation.mode || 'chat') === mode
   )
+  const activeExternalProvider =
+    agentSettings.externalProviders.find(
+      (provider) => provider.id === agentSettings.activeExternalProviderId
+    ) || agentSettings.externalProviders[0]
+  const agentUsesExternalProvider =
+    isAgentMode && agentSettings.providerKind === 'external' && !!activeExternalProvider
+  const agentChannelOptions = [
+    { label: t('内置渠道'), value: 'builtin', ratio: 1 },
+    ...agentSettings.externalProviders.map((provider) => ({
+      label: provider.name || t('外置渠道'),
+      value: provider.id,
+      ratio: 1,
+      desc: provider.endpointType === 'responses' ? 'Responses' : 'Chat Completions',
+    })),
+  ]
+  const activeAgentChannelValue = agentUsesExternalProvider
+    ? activeExternalProvider.id
+    : 'builtin'
+  const activeAgentModels =
+    agentUsesExternalProvider && activeExternalProvider.models.length > 0
+      ? activeExternalProvider.models
+      : models
+  const activeAgentModelValue = agentUsesExternalProvider
+    ? activeExternalProvider.selectedModel || activeExternalProvider.models[0]?.value || ''
+    : config.model
+  const contextUsage =
+    activeConversation?.agentContextUsage ||
+    calculateAgentContextUsage(
+      buildModelVisibleAgentMessages(
+        activeConversation,
+        messages,
+        agentSettings.context
+      ),
+      agentSettings.context
+    )
 
   useEffect(() => {
     if (!isAgentMode || !helperHistoryKey) {
@@ -1289,6 +1494,9 @@ export function Playground() {
           state.conversations,
           state.activeConversationId
         )
+        if (state.agentSettings) {
+          updateAgentSettings(state.agentSettings)
+        }
         setHelperHistoryReady(true)
       } catch (error) {
         if (cancelled) return
@@ -1317,6 +1525,7 @@ export function Playground() {
     replaceModeConversations,
     setConversationPersistenceEnabled,
     t,
+    updateAgentSettings,
   ])
 
   useEffect(() => {
@@ -1340,6 +1549,7 @@ export function Playground() {
       void saveHelperAgentConversations({
         conversations: agentConversations,
         activeConversationId: activeAgentId,
+        agentSettings,
       }).catch((error) => {
         lastSavedHelperHistoryRef.current = ''
         if (isUnsupportedHelperHistoryError(error)) {
@@ -1363,6 +1573,7 @@ export function Playground() {
     helperHistoryKey,
     helperHistoryReady,
     helperHistorySupported,
+    agentSettings,
     setConversationPersistenceEnabled,
     t,
   ])
@@ -1874,7 +2085,10 @@ export function Playground() {
       initialMessages: MessageType[],
       runtime: AgentToolRuntime,
       runtimeWorkspaceName: string,
-      conversationId: string | null
+      conversationId: string | null,
+      externalProvider: AgentExternalProvider | null,
+      currentAgentSettings: AgentSettings,
+      currentConversation = activeConversation
     ) => {
       const control = agentStreamControlRef.current
       control.stopped = false
@@ -1887,7 +2101,11 @@ export function Playground() {
       setIsAgentRunning(true)
 
       let workingMessages = initialMessages
+      let contextConversation = currentConversation
+      const useExternalResponses =
+        !!externalProvider && externalProvider.endpointType === 'responses'
       const useNativeResponses =
+        !externalProvider &&
         isOpenAIReasoningModel(config.model) &&
         !shouldUseOpenAICompatibleMode(config)
 
@@ -1934,15 +2152,36 @@ export function Playground() {
             )
           }
 
-          if (useNativeResponses) {
+          const visibleModelMessages = buildModelVisibleAgentMessages(
+            contextConversation,
+            workingMessages,
+            currentAgentSettings.context
+          )
+
+          if (useNativeResponses || useExternalResponses) {
             const payload = buildAgentResponsesPayload(
-              workingMessages,
-              { ...config, stream: true },
+              visibleModelMessages,
+              {
+                ...config,
+                model:
+                  externalProvider?.selectedModel ||
+                  externalProvider?.models[0]?.value ||
+                  config.model,
+                openaiRequestMode: externalProvider
+                  ? 'compatible'
+                  : config.openaiRequestMode,
+                stream: true,
+              },
               parameterEnabled,
               runtimeWorkspaceName,
               conversationId,
-              usableHelperStatus
+              usableHelperStatus,
+              currentAgentSettings.context.systemPrompt
             )
+            if (useExternalResponses) {
+              delete payload.group
+              delete payload.prompt_cache_key
+            }
             if (payload.input.length === 0) {
               throw new Error('responses_input_empty')
             }
@@ -1950,7 +2189,17 @@ export function Playground() {
               payload,
               (content) => updateLastAssistantContent(content, 'streaming', null),
               handleReconnect,
-              control
+              control,
+              useExternalResponses && externalProvider
+                ? {
+                    endpoint: externalEndpoint(externalProvider.baseUrl, '/responses'),
+                    headers: {
+                      'Content-Type': 'application/json',
+                      Authorization: `Bearer ${externalProvider.apiKey}`,
+                    },
+                    chargeBeforeRequest: chargeExternalRequestFeeOnce,
+                  }
+                : {}
             )
             rawContent = result.rawContent
             nativeToolCalls = result.nativeToolCalls
@@ -1958,26 +2207,47 @@ export function Playground() {
           } else {
             const payload = buildChatCompletionPayload(
               [
-                createAgentSystemMessage(runtimeWorkspaceName, usableHelperStatus),
-                ...workingMessages,
+                createAgentSystemMessage(
+                  runtimeWorkspaceName,
+                  usableHelperStatus,
+                  currentAgentSettings.context.systemPrompt
+                ),
+                ...visibleModelMessages,
               ],
-              { ...config, stream: true },
+              {
+                ...config,
+                model:
+                  externalProvider?.selectedModel ||
+                  externalProvider?.models[0]?.value ||
+                  config.model,
+                stream: true,
+              },
               parameterEnabled,
               {
-                promptCacheKey: buildAgentPromptCacheKey(conversationId),
+                promptCacheKey: externalProvider
+                  ? undefined
+                  : buildAgentPromptCacheKey(conversationId),
               }
             )
-            rawContent = await streamAgentCompletion(
-              payload,
-              (content) => updateLastAssistantContent(content, 'streaming', null),
-              handleReconnect,
-              control
-            )
+            rawContent = externalProvider
+              ? await streamExternalAgentChatCompletion(
+                  externalProvider,
+                  payload,
+                  (content) => updateLastAssistantContent(content, 'streaming', null),
+                  handleReconnect,
+                  control
+                )
+              : await streamAgentCompletion(
+                  payload,
+                  (content) => updateLastAssistantContent(content, 'streaming', null),
+                  handleReconnect,
+                  control
+                )
           }
 
           if (control.stopped) return
           const visibleContent = stripAgentToolBlocks(rawContent)
-          const toolCalls = useNativeResponses
+          const toolCalls = useNativeResponses || useExternalResponses
             ? nativeToolCalls
             : parseAgentToolCalls(rawContent)
           if (hasAgentToolSyntax(rawContent) && toolCalls.length === 0) {
@@ -1993,7 +2263,8 @@ export function Playground() {
                 ...message,
                 apiContent: toolCalls.length > 0 ? rawContent : undefined,
                 agentResponsesOutputItems:
-                  useNativeResponses && nativeOutputItems.length > 0
+                  (useNativeResponses || useExternalResponses) &&
+                  nativeOutputItems.length > 0
                     ? nativeOutputItems
                     : undefined,
                 versions: [
@@ -2008,7 +2279,37 @@ export function Playground() {
           })
           updateMessages(workingMessages)
 
-          if (toolCalls.length === 0) return
+          if (toolCalls.length === 0) {
+            const compaction = compactAgentConversationIfNeeded(
+              contextConversation,
+              workingMessages,
+              currentAgentSettings.context,
+              runtimeWorkspaceName
+            )
+            if (compaction.changed) {
+              contextConversation = contextConversation
+                ? {
+                    ...contextConversation,
+                    agentContextSummary: compaction.summary,
+                    agentContextSummaryUpdatedAt: Date.now(),
+                    agentContextCompactedBeforeKey:
+                      compaction.compactedBeforeKey,
+                    agentContextUsage: compaction.usage,
+                  }
+                : contextConversation
+            }
+            updateActiveConversationMeta({
+              ...(compaction.changed
+                ? {
+                    agentContextSummary: compaction.summary,
+                    agentContextSummaryUpdatedAt: Date.now(),
+                    agentContextCompactedBeforeKey: compaction.compactedBeforeKey,
+                  }
+                : {}),
+              agentContextUsage: compaction.usage,
+            })
+            return
+          }
 
           const toolExecution = await executeToolCallsWithApproval(
             runtime,
@@ -2021,6 +2322,34 @@ export function Playground() {
             nextAssistantMessage,
           ]
           updateMessages(workingMessages)
+
+          const compaction = compactAgentConversationIfNeeded(
+            contextConversation,
+            workingMessages,
+            currentAgentSettings.context,
+            runtimeWorkspaceName
+          )
+          if (compaction.changed) {
+            contextConversation = contextConversation
+              ? {
+                  ...contextConversation,
+                  agentContextSummary: compaction.summary,
+                  agentContextSummaryUpdatedAt: Date.now(),
+                  agentContextCompactedBeforeKey: compaction.compactedBeforeKey,
+                  agentContextUsage: compaction.usage,
+                }
+              : contextConversation
+            updateActiveConversationMeta({
+              agentContextSummary: compaction.summary,
+              agentContextSummaryUpdatedAt: Date.now(),
+              agentContextCompactedBeforeKey: compaction.compactedBeforeKey,
+              agentContextUsage: compaction.usage,
+            })
+          } else {
+            updateActiveConversationMeta({
+              agentContextUsage: compaction.usage,
+            })
+          }
         }
 
         workingMessages = workingMessages.map((message, index) => {
@@ -2075,6 +2404,8 @@ export function Playground() {
       usableHelperStatus,
       parameterEnabled,
       t,
+      activeConversation,
+      updateActiveConversationMeta,
       updateMessages,
     ]
   )
@@ -2094,6 +2425,10 @@ export function Playground() {
         runtimeWorkspaceName = workspace.name
       }
       if (isAgentRunning) return
+      if (agentUsesExternalProvider && !activeAgentModelValue) {
+        toast.error(t('请先在 Agent 设置中拉取并选择外置渠道模型'))
+        return
+      }
 
       updateActiveConversationMeta({ workspaceName: runtimeWorkspaceName })
       const userMessage = createUserMessage(text, attachments)
@@ -2105,7 +2440,10 @@ export function Playground() {
         newMessages,
         runtime,
         runtimeWorkspaceName,
-        conversationId
+        conversationId,
+        agentUsesExternalProvider ? activeExternalProvider : null,
+        agentSettings,
+        activeConversation
       )
       return
     }
@@ -2183,8 +2521,49 @@ export function Playground() {
     updateMessages(newMessages)
   }
 
+  const handleAgentChannelChange = (value: string) => {
+    if (!isAgentMode || value === 'builtin') {
+      updateAgentSettings((prev) => ({
+        ...prev,
+        providerKind: 'builtin',
+        activeExternalProviderId: undefined,
+      }))
+      return
+    }
+    updateAgentSettings((prev) => ({
+      ...prev,
+      providerKind: 'external',
+      activeExternalProviderId: value,
+    }))
+  }
+
+  const handleAgentModelChange = (value: string) => {
+    if (!agentUsesExternalProvider || !activeExternalProvider) {
+      updateConfig('model', value)
+      return
+    }
+    updateAgentSettings((prev) => ({
+      ...prev,
+      externalProviders: prev.externalProviders.map((provider) =>
+        provider.id === activeExternalProvider.id
+          ? { ...provider, selectedModel: value }
+          : provider
+      ),
+    }))
+  }
+
   return (
-    <div className='relative flex size-full flex-col overflow-hidden'>
+    <div
+      className='relative flex size-full flex-col overflow-hidden'
+      style={
+        isAgentMode
+          ? {
+              fontSize: `${agentSettings.context.fontSize}px`,
+              fontFamily: agentSettings.context.fontFamily || undefined,
+            }
+          : undefined
+      }
+    >
       <PlaygroundHistorySidebar
         activeConversationId={activeConversationId}
         conversations={visibleConversations}
@@ -2352,14 +2731,21 @@ export function Playground() {
       <div className='mx-auto w-full max-w-4xl'>
         <PlaygroundInput
           disabled={isBusy}
-          groups={groups}
-          groupValue={config.group}
+          groups={isAgentMode ? agentChannelOptions : groups}
+          groupValue={isAgentMode ? activeAgentChannelValue : config.group}
+          groupLabel={isAgentMode ? t('渠道') : undefined}
+          contextUsage={isAgentMode ? contextUsage : undefined}
           isGenerating={isBusy}
           isModelLoading={isLoadingModels}
-          modelValue={config.model}
-          models={models}
-          onGroupChange={(value) => updateConfig('group', value)}
-          onModelChange={(value) => updateConfig('model', value)}
+          modelValue={isAgentMode ? activeAgentModelValue : config.model}
+          models={isAgentMode ? activeAgentModels : models}
+          onGroupChange={(value) =>
+            isAgentMode ? handleAgentChannelChange(value) : updateConfig('group', value)
+          }
+          onModelChange={(value) =>
+            isAgentMode ? handleAgentModelChange(value) : updateConfig('model', value)
+          }
+          onOpenAgentSettings={() => setIsAgentSettingsOpen(true)}
           reasoningEffort={config.openaiReasoningEffort}
           onReasoningEffortChange={(value) =>
             updateConfig('openaiReasoningEffort', value)
@@ -2374,6 +2760,13 @@ export function Playground() {
           agentMode={isAgentMode}
         />
       </div>
+
+      <PlaygroundAgentSettingsDialog
+        open={isAgentSettingsOpen}
+        onOpenChange={setIsAgentSettingsOpen}
+        settings={agentSettings}
+        onSettingsChange={updateAgentSettings}
+      />
 
       <Dialog
         open={isHelperPairDialogOpen && !isHelperConnected}

@@ -37,6 +37,67 @@ func PlaygroundImageEdit(c *gin.Context) {
 	playgroundRelay(c, types.RelayFormatOpenAIImage)
 }
 
+func ChargePlaygroundExternalAgentRequestFee(c *gin.Context) {
+	feeQuota := int(common.QuotaPerUnit * 0.05)
+	userId := c.GetInt("id")
+	if userId <= 0 {
+		common.ApiErrorMsg(c, "用户未登录")
+		return
+	}
+	userQuota, err := model.GetUserQuota(userId, false)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if userQuota < feeQuota {
+		common.ApiErrorMsg(c, "余额不足，外置 Agent 渠道每次请求需要 0.05 美元手续费")
+		return
+	}
+	if err := model.DecreaseUserQuota(userId, feeQuota, false); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	requestId := c.GetString(common.RequestIdKey)
+	if requestId == "" {
+		requestId = uuid.NewString()
+	}
+	summary, err := model.RecordUsageSettlementWithSummary(model.ProfitUsageInput{
+		UserId:       userId,
+		RequestId:    requestId,
+		ModelName:    "external-agent-provider-fee",
+		QuotaUsed:    int64(feeQuota),
+		SourceType:   model.ProfitLotTypeWallet,
+		ChannelId:    0,
+		PromptTokens: 0,
+	})
+	if err != nil {
+		_ = model.IncreaseUserQuotaWithSource(userId, feeQuota, false, model.ProfitLotSourceGift, "external_agent_fee_rollback")
+		common.ApiError(c, err)
+		return
+	}
+	model.UpdateUserUsedQuotaAndRequestCount(userId, feeQuota)
+	other := map[string]interface{}{
+		"external_agent_fee": true,
+	}
+	if summary != nil {
+		other["downstream_charge_cny"] = summary.RealizedRevenueCNY
+		other["upstream_cost_cny"] = summary.UpstreamCostCNY
+		other["request_gross_profit_cny"] = summary.RequestGrossProfitCNY
+	}
+	model.RecordConsumeLog(c, userId, model.RecordConsumeLogParams{
+		ModelName: "external-agent-provider-fee",
+		TokenName: "playground-agent-external",
+		Quota:     feeQuota,
+		Content:   "外置 Agent 渠道请求手续费 0.05 USD",
+		Group:     common.GetContextKeyString(c, constant.ContextKeyUsingGroup),
+		Other:     other,
+	})
+	common.ApiSuccess(c, gin.H{
+		"fee_quota": feeQuota,
+		"fee_usd":   0.05,
+	})
+}
+
 func CreatePlaygroundImageGenerationTask(c *gin.Context) {
 	createPlaygroundImageTask(c, "/pg/images/generations")
 }

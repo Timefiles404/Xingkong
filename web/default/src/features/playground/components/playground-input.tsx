@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react'
 import {
-  CheckIcon,
   ChevronDownIcon,
   FileIcon,
   ImageIcon,
@@ -12,6 +11,7 @@ import {
   BrainCircuitIcon,
   SendIcon,
   SquareIcon,
+  SettingsIcon,
 } from 'lucide-react'
 import type { FileUIPart } from 'ai'
 import { useTranslation } from 'react-i18next'
@@ -40,6 +40,7 @@ import {
 import { ModelGroupSelector } from '@/components/model-group-selector'
 import type {
   GroupOption,
+  AgentContextUsage,
   ModelOption,
   OpenAIReasoningEffort,
   OpenAIRequestMode,
@@ -68,6 +69,9 @@ interface PlaygroundInputProps {
   groups: GroupOption[]
   groupValue: string
   onGroupChange: (value: string) => void
+  groupLabel?: string
+  contextUsage?: AgentContextUsage
+  onOpenAgentSettings?: () => void
   agentMode?: boolean
 }
 
@@ -621,6 +625,101 @@ function OpenAIRequestControls({
   )
 }
 
+function ContextUsageRing({
+  usage,
+}: {
+  usage?: AgentContextUsage
+}) {
+  const { t } = useTranslation()
+  const used = usage?.totalTokens || 0
+  const limit = usage?.limitTokens || 1
+  const percent = Math.min(Math.round((used / limit) * 100), 100)
+  const circumference = 44
+  const offset = circumference - (circumference * percent) / 100
+  const parts = [
+    { key: 'user', label: t('用户'), value: usage?.userTokens || 0, className: 'bg-sky-500' },
+    { key: 'assistant', label: t('输出'), value: usage?.assistantTokens || 0, className: 'bg-emerald-500' },
+    { key: 'tool', label: t('工具'), value: usage?.toolTokens || 0, className: 'bg-amber-500' },
+    { key: 'system', label: t('系统'), value: usage?.systemTokens || 0, className: 'bg-violet-500' },
+  ]
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <PromptInputButton
+          className='!rounded-full border font-medium'
+          variant='outline'
+          type='button'
+        >
+          <svg className='size-5 -rotate-90' viewBox='0 0 18 18'>
+            <circle
+              className='stroke-muted'
+              cx='9'
+              cy='9'
+              fill='none'
+              r='7'
+              strokeWidth='2'
+            />
+            <circle
+              className='stroke-primary transition-all'
+              cx='9'
+              cy='9'
+              fill='none'
+              r='7'
+              strokeDasharray={circumference}
+              strokeDashoffset={offset}
+              strokeLinecap='round'
+              strokeWidth='2'
+            />
+          </svg>
+          <span className='hidden sm:inline'>{percent}%</span>
+        </PromptInputButton>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align='end' className='w-72 p-3'>
+        <div className='space-y-3'>
+          <div>
+            <div className='text-sm font-medium'>{t('上下文用量')}</div>
+            <div className='text-muted-foreground text-xs'>
+              {used.toLocaleString()} / {limit.toLocaleString()} tokens
+            </div>
+          </div>
+          <div className='h-2 overflow-hidden rounded-full bg-muted'>
+            {parts.map((part) => {
+              const width = used > 0 ? `${Math.max((part.value / used) * 100, 2)}%` : '0%'
+              return (
+                <span
+                  className={`inline-block h-full ${part.className}`}
+                  key={part.key}
+                  style={{ width }}
+                />
+              )
+            })}
+          </div>
+          <div className='grid gap-1.5 text-xs'>
+            {parts.map((part) => (
+              <div className='flex items-center justify-between' key={part.key}>
+                <span className='flex items-center gap-2'>
+                  <span className={`size-2 rounded-full ${part.className}`} />
+                  {part.label}
+                </span>
+                <span className='text-muted-foreground'>
+                  {part.value.toLocaleString()}
+                </span>
+              </div>
+            ))}
+            <div className='flex items-center justify-between border-t pt-2'>
+              <span>{t('外置渠道手续费')}</span>
+              <span className='text-muted-foreground'>
+                ${usage?.feeUSD.toFixed(2) || '0.05'} / {usage?.feeQuota || 500} quota
+              </span>
+            </div>
+          </div>
+        </div>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
 export function PlaygroundInput({
   onSubmit,
   onStop,
@@ -637,6 +736,9 @@ export function PlaygroundInput({
   groups,
   groupValue,
   onGroupChange,
+  groupLabel,
+  contextUsage,
+  onOpenAgentSettings,
   agentMode = false,
 }: PlaygroundInputProps) {
   const { t } = useTranslation()
@@ -704,15 +806,6 @@ export function PlaygroundInput({
         <PromptInputFooter className='p-2.5'>
           <PromptInputTools>
             <AttachmentMenu disabled={disabled} />
-
-            <div className='text-muted-foreground hidden items-center gap-2 text-xs lg:flex'>
-              <CheckIcon className='size-3.5' />
-              <span>
-                {t(
-                  'Supports text files, images, screenshots, and camera photos'
-                )}
-              </span>
-            </div>
           </PromptInputTools>
 
           <div className='flex items-center gap-1.5 md:gap-2'>
@@ -723,8 +816,27 @@ export function PlaygroundInput({
               selectedGroup={groupValue}
               groups={groups}
               onGroupChange={onGroupChange}
-              disabled={isModelSelectDisabled || isGroupSelectDisabled}
+              disabled={
+                agentMode
+                  ? disabled
+                  : isModelSelectDisabled || isGroupSelectDisabled
+              }
+              groupLabel={groupLabel}
             />
+
+            {agentMode && <ContextUsageRing usage={contextUsage} />}
+
+            {agentMode && (
+              <PromptInputButton
+                className='!rounded-full border font-medium'
+                onClick={onOpenAgentSettings}
+                type='button'
+                variant='outline'
+              >
+                <SettingsIcon size={16} />
+                <span className='hidden sm:inline'>{t('Agent 设置')}</span>
+              </PromptInputButton>
+            )}
 
             {showOpenAIControls && (
               <OpenAIRequestControls

@@ -22,6 +22,7 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.POST("/setup", controller.PostSetup)
 		apiRouter.GET("/status", controller.GetStatus)
 		apiRouter.GET("/helper/download/:target", middleware.UserAuth(), controller.DownloadAgentHelper)
+		apiRouter.POST("/playground/agent/external-request-fee", middleware.UserAuth(), controller.ChargePlaygroundExternalAgentRequestFee)
 		apiRouter.GET("/uptime/status", controller.GetUptimeKumaStatus)
 		apiRouter.GET("/uptime/model-availability", middleware.UserAuth(), controller.GetModelAvailability)
 		apiRouter.GET("/models", middleware.UserAuth(), controller.DashboardListModels)

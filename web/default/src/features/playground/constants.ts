@@ -1,4 +1,4 @@
-import type { PlaygroundConfig, ParameterEnabled } from './types'
+import type { AgentSettings, PlaygroundConfig, ParameterEnabled } from './types'
 
 // Message constants
 export const MESSAGE_ROLES = {
@@ -50,6 +50,21 @@ export const DEFAULT_PARAMETER_ENABLED: ParameterEnabled = {
   seed: false,
 }
 
+export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
+  providerKind: 'builtin',
+  activeExternalProviderId: undefined,
+  externalProviders: [],
+  context: {
+    enabled: true,
+    contextLimit: 128000,
+    compactThresholdRatio: 0.9,
+    tailTurns: 4,
+    fontSize: 16,
+    fontFamily: '',
+    systemPrompt: '',
+  },
+}
+
 // Storage keys
 export const STORAGE_KEYS = {
   CONFIG: 'playground_config',
@@ -59,6 +74,7 @@ export const STORAGE_KEYS = {
   ACTIVE_CHAT_CONVERSATION_ID: 'playground_active_chat_conversation_id',
   ACTIVE_AGENT_CONVERSATION_ID: 'playground_active_agent_conversation_id',
   PARAMETER_ENABLED: 'playground_parameter_enabled',
+  AGENT_SETTINGS: 'playground_agent_settings',
 } as const
 
 // Error messages

@@ -1,6 +1,7 @@
 import { api } from '@/lib/api'
 import { API_ENDPOINTS } from './constants'
 import type {
+  AgentExternalEndpointType,
   ChatCompletionRequest,
   ChatCompletionResponse,
   ModelOption,
@@ -58,4 +59,38 @@ export async function getUserGroups(): Promise<GroupOption[]> {
     ratio: info.ratio,
     desc: info.desc,
   }))
+}
+
+function normalizeExternalBaseUrl(baseUrl: string): string {
+  return baseUrl.trim().replace(/\/+$/, '')
+}
+
+export async function getExternalProviderModels(
+  baseUrl: string,
+  apiKey: string,
+  endpointType: AgentExternalEndpointType
+): Promise<ModelOption[]> {
+  const normalized = normalizeExternalBaseUrl(baseUrl)
+  const url = endpointType === 'responses'
+    ? `${normalized}/models`
+    : `${normalized}/models`
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+    },
+  })
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${await response.text()}`)
+  }
+  const payload = (await response.json()) as {
+    data?: Array<{ id?: string; name?: string }>
+  }
+  return (payload.data || [])
+    .map((item) => item.id || item.name || '')
+    .filter(Boolean)
+    .map((model) => ({ label: model, value: model }))
+}
+
+export async function chargeExternalAgentRequestFee(): Promise<void> {
+  await api.post('/api/playground/agent/external-request-fee')
 }

@@ -1,5 +1,6 @@
-import { STORAGE_KEYS } from '../constants'
+import { DEFAULT_AGENT_SETTINGS, STORAGE_KEYS } from '../constants'
 import type {
+  AgentSettings,
   PlaygroundConfig,
   ParameterEnabled,
   Message,
@@ -86,6 +87,39 @@ export function saveParameterEnabled(
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error('Failed to save parameter enabled:', error)
+  }
+}
+
+export function loadAgentSettings(): AgentSettings {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEYS.AGENT_SETTINGS)
+    if (saved) {
+      const parsed = JSON.parse(saved) as Partial<AgentSettings>
+      return {
+        ...DEFAULT_AGENT_SETTINGS,
+        ...parsed,
+        context: {
+          ...DEFAULT_AGENT_SETTINGS.context,
+          ...(parsed.context || {}),
+        },
+        externalProviders: Array.isArray(parsed.externalProviders)
+          ? parsed.externalProviders
+          : [],
+      }
+    }
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error('Failed to load agent settings:', error)
+  }
+  return DEFAULT_AGENT_SETTINGS
+}
+
+export function saveAgentSettings(settings: AgentSettings): void {
+  try {
+    localStorage.setItem(STORAGE_KEYS.AGENT_SETTINGS, JSON.stringify(settings))
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error('Failed to save agent settings:', error)
   }
 }
 
@@ -268,6 +302,7 @@ export function clearPlaygroundData(): void {
     localStorage.removeItem(STORAGE_KEYS.ACTIVE_CONVERSATION_ID)
     localStorage.removeItem(STORAGE_KEYS.ACTIVE_CHAT_CONVERSATION_ID)
     localStorage.removeItem(STORAGE_KEYS.ACTIVE_AGENT_CONVERSATION_ID)
+    localStorage.removeItem(STORAGE_KEYS.AGENT_SETTINGS)
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error('Failed to clear playground data:', error)
