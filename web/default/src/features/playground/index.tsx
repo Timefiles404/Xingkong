@@ -241,10 +241,12 @@ function getMessageCompactionText(message: MessageType): string {
         [
           `- ${result.tool} ${result.path || '.'}`,
           result.ok ? 'ok' : 'failed',
-          result.summary || result.error || result.output || '',
+          result.summary ? `summary:\n${result.summary}` : '',
+          result.output ? `output:\n${result.output}` : '',
+          result.error ? `error:\n${result.error}` : '',
         ]
           .filter(Boolean)
-          .join(' | ')
+          .join('\n')
       ),
     ].join('\n')
   }

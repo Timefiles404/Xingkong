@@ -47,15 +47,6 @@ export function estimateMessageTokens(message: Message): number {
   return base + toolOverhead
 }
 
-function countUserTurns(messages: Message[]): number {
-  return messages.filter(
-    (message) =>
-      message.from === 'user' &&
-      !message.isAgentToolResult &&
-      !isCompactionSummaryMessage(message)
-  ).length
-}
-
 function getRecentTailStartIndex(messages: Message[], tailTurns: number): number {
   if (tailTurns <= 0) return messages.length
   let seen = 0
@@ -177,7 +168,11 @@ export function buildModelVisibleAgentMessages(
   const startIndex = compactedBeforeKey
     ? modelMessages.findIndex((message) => message.key === compactedBeforeKey)
     : -1
-  const tail = startIndex >= 0 ? modelMessages.slice(startIndex) : modelMessages
+  const tail = compactedBeforeKey
+    ? startIndex >= 0
+      ? modelMessages.slice(startIndex)
+      : []
+    : []
   return [buildCompactionSummaryMessage(conversation.agentContextSummary), ...tail]
     .map((message, index) =>
       index === 0 ? message : stripNativeHistoryAfterCompaction(message)
@@ -233,7 +228,6 @@ export function shouldCompactAgentContext(
   settings: AgentContextSettings
 ): boolean {
   if (!settings.enabled) return false
-  if (countUserTurns(messages) <= settings.tailTurns) return false
   const usage = calculateAgentContextUsage(messages, settings)
   return usage.totalTokens >= usage.thresholdTokens
 }
@@ -297,9 +291,13 @@ export function prepareAgentContextCompaction(
     }
   }
 
-  const tailTurns = force ? 1 : settings.tailTurns
-  const tailStart = getRecentTailStartIndex(visibleMessages, tailTurns)
+  let tailStart = force
+    ? visibleMessages.length
+    : getRecentTailStartIndex(visibleMessages, settings.tailTurns)
   if (tailStart <= 0) {
+    tailStart = visibleMessages.length
+  }
+  if (tailStart <= 0 || visibleMessages.length === 0) {
     return {
       changed: false,
       compactedMessages: [],
