@@ -2731,7 +2731,6 @@ export function Playground() {
 
   const handleCompactContextNow = () => {
     if (!isAgentMode || isBusy) return
-    if (!activeConversation) return
     void compactAgentMessages({
       currentConversation: activeConversation,
       currentMessages: messages,
@@ -2739,6 +2738,10 @@ export function Playground() {
       runtimeWorkspaceName: activeWorkspaceName,
       force: true,
       showStatus: true,
+    }).then((result) => {
+      if (!result.changed) {
+        toast.info(t('当前上下文暂时没有可压缩的旧内容'))
+      }
     })
   }
 
@@ -3019,7 +3022,7 @@ export function Playground() {
           groupValue={isAgentMode ? activeAgentChannelValue : config.group}
           groupLabel={isAgentMode ? t('渠道') : undefined}
           contextUsage={isAgentMode ? contextUsage : undefined}
-          canCompactContext={isAgentMode && !isBusy && messages.length > 2}
+          canCompactContext={isAgentMode && !isBusy}
           isCompactingContext={isAgentCompacting}
           isGenerating={isBusy}
           isModelLoading={isLoadingModels}

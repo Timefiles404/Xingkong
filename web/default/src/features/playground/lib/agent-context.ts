@@ -276,7 +276,8 @@ export function prepareAgentContextCompaction(
     }
   }
 
-  const tailStart = getRecentTailStartIndex(visibleMessages, settings.tailTurns)
+  const tailTurns = force ? 1 : settings.tailTurns
+  const tailStart = getRecentTailStartIndex(visibleMessages, tailTurns)
   if (tailStart <= 0) {
     return {
       changed: false,

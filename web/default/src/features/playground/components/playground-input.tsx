@@ -723,9 +723,8 @@ function ContextUsageRing({
           </div>
           <DropdownMenuItem
             className='mt-2 justify-center rounded-lg border text-xs'
-            disabled={!canCompact || isCompacting}
+            disabled={!onCompactNow || !canCompact || isCompacting}
             onClick={(event) => {
-              event.preventDefault()
               onCompactNow?.()
             }}
           >
