@@ -1,3 +1,5 @@
+import type { PlaygroundConversation } from '../types'
+
 export type AgentToolName =
   | 'list_dir'
   | 'read_file'
@@ -78,6 +80,11 @@ interface AgentHelperFSResponse {
   summary?: string
   entries?: WorkspaceEntry[]
   error?: string
+}
+
+export interface AgentHelperConversationState {
+  conversations: PlaygroundConversation[]
+  activeConversationId: string | null
 }
 
 export interface AgentToolRuntime {
@@ -868,6 +875,40 @@ export async function listHelperWorkspaceEntries(
   })
   if (!response.ok) throw new Error(response.error || 'helper_list_failed')
   return response.entries || []
+}
+
+export async function loadHelperAgentConversations(): Promise<AgentHelperConversationState> {
+  const response = await helperFSRequest({
+    op: 'agent_history_load',
+    path: '.',
+  })
+  if (!response.ok) throw new Error(response.error || 'helper_history_load_failed')
+  try {
+    const parsed = JSON.parse(response.output || '{}') as Partial<AgentHelperConversationState>
+    return {
+      conversations: Array.isArray(parsed.conversations)
+        ? parsed.conversations.filter(Boolean)
+        : [],
+      activeConversationId: parsed.activeConversationId || null,
+    }
+  } catch {
+    return { conversations: [], activeConversationId: null }
+  }
+}
+
+export async function saveHelperAgentConversations(
+  state: AgentHelperConversationState
+): Promise<void> {
+  const response = await helperFSRequest({
+    op: 'agent_history_save',
+    path: '.',
+    content: JSON.stringify({
+      conversations: state.conversations,
+      activeConversationId: state.activeConversationId,
+      savedAt: Date.now(),
+    }),
+  })
+  if (!response.ok) throw new Error(response.error || 'helper_history_save_failed')
 }
 
 export async function revealHelperWorkspacePath(path: string): Promise<void> {

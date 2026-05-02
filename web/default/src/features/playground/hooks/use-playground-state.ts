@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import { nanoid } from 'nanoid'
 import { DEFAULT_CONFIG, DEFAULT_PARAMETER_ENABLED } from '../constants'
 import {
@@ -60,6 +60,7 @@ function createConversation(
  * Main state management hook for playground
  */
 export function usePlaygroundState() {
+  const persistConversationsRef = useRef(true)
   // Load initial state from localStorage
   const [config, setConfig] = useState<PlaygroundConfig>(() => {
     const savedConfig = loadConfig()
@@ -108,19 +109,21 @@ export function usePlaygroundState() {
       nextActiveConversationIds?: Record<PlaygroundMode, string | null>
     ) => {
       const activeConversationIds =
-        nextActiveConversationIds || conversationState.activeConversationIds
-      saveConversations(
-        nextConversations,
-        nextActiveConversationId,
-        activeConversationIds
-      )
+        nextActiveConversationIds || { chat: null, agent: null }
+      if (persistConversationsRef.current) {
+        saveConversations(
+          nextConversations,
+          nextActiveConversationId,
+          activeConversationIds
+        )
+      }
       return {
         conversations: nextConversations,
         activeConversationId: nextActiveConversationId,
         activeConversationIds,
       }
     },
-    [conversationState.activeConversationIds]
+    []
   )
 
   // Update config with automatic save
@@ -336,6 +339,59 @@ export function usePlaygroundState() {
     [mode, persistConversationState]
   )
 
+  const replaceModeConversations = useCallback(
+    (
+      targetMode: PlaygroundMode,
+      modeConversations: PlaygroundConversation[],
+      nextActiveId: string | null = null
+    ) => {
+      setConversationState((prevState) => {
+        const normalized = modeConversations
+          .filter((conversation) => (conversation.mode || targetMode) === targetMode)
+          .map((conversation) => ({
+            ...conversation,
+            mode: targetMode,
+            title: conversation.title || getConversationTitle(conversation.messages || []),
+            messages: conversation.messages || [],
+            createdAt: conversation.createdAt || Date.now(),
+            updatedAt: conversation.updatedAt || Date.now(),
+          }))
+
+        const conversationsForMode =
+          normalized.length > 0 ? normalized : [createConversation([], targetMode)]
+        const activeForMode =
+          nextActiveId &&
+          conversationsForMode.some((conversation) => conversation.id === nextActiveId)
+            ? nextActiveId
+            : conversationsForMode[0]?.id || null
+
+        const otherConversations = prevState.conversations.filter(
+          (conversation) => (conversation.mode || 'chat') !== targetMode
+        )
+        const nextConversations = [...conversationsForMode, ...otherConversations]
+        const nextActiveConversationIds = {
+          ...prevState.activeConversationIds,
+          [targetMode]: activeForMode,
+        }
+        const nextActiveConversationId =
+          mode === targetMode
+            ? activeForMode
+            : prevState.activeConversationId || activeForMode
+
+        return persistConversationState(
+          nextConversations,
+          nextActiveConversationId,
+          nextActiveConversationIds
+        )
+      })
+    },
+    [mode, persistConversationState]
+  )
+
+  const setConversationPersistenceEnabled = useCallback((enabled: boolean) => {
+    persistConversationsRef.current = enabled
+  }, [])
+
   // Reset config to defaults
   const resetConfig = useCallback(() => {
     setConfig(DEFAULT_CONFIG)
@@ -372,5 +428,7 @@ export function usePlaygroundState() {
     switchMode,
     deleteConversation,
     updateActiveConversationMeta,
+    replaceModeConversations,
+    setConversationPersistenceEnabled,
   }
 }

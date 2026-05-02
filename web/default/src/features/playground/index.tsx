@@ -59,11 +59,13 @@ import {
   isOpenAIReasoningModel,
   isValidMessage,
   isFileSystemAccessSupported,
+  loadHelperAgentConversations,
   launchAgentHelperProtocol,
   pairAgentHelper,
   parseAgentToolCalls,
   requestWorkspaceDirectory,
   requiresAgentToolApproval,
+  saveHelperAgentConversations,
   stripAgentToolBlocks,
   shouldUseOpenAICompatibleMode,
 } from './lib'
@@ -1213,6 +1215,8 @@ export function Playground() {
     switchMode,
     deleteConversation,
     updateActiveConversationMeta,
+    replaceModeConversations,
+    setConversationPersistenceEnabled,
   } = usePlaygroundState()
   const [workspaceHandles, setWorkspaceHandles] = useState<
     Record<string, FileSystemDirectoryHandle>
@@ -1225,6 +1229,8 @@ export function Playground() {
   const [helperPairCodeInput, setHelperPairCodeInput] = useState('')
   const [helperManualCommand, setHelperManualCommand] = useState('')
   const [workspaceRefreshKey, setWorkspaceRefreshKey] = useState(0)
+  const [helperHistoryReady, setHelperHistoryReady] = useState(false)
+  const lastSavedHelperHistoryRef = useRef('')
   const [isAgentRunning, setIsAgentRunning] = useState(false)
   const pendingAgentApprovalsRef = useRef<
     Map<string, (approved: boolean) => void>
@@ -1241,6 +1247,8 @@ export function Playground() {
   const isAgentMode = mode === 'agent'
   const isHelperConnected = isAgentHelperPaired(agentHelperStatus)
   const usableHelperStatus = isHelperConnected ? agentHelperStatus : null
+  const helperHistoryKey =
+    isAgentMode && usableHelperStatus ? usableHelperStatus.workspace : ''
   const activeWorkspaceName =
     workspaceName ||
     activeWorkspaceHandle?.name ||
@@ -1251,6 +1259,91 @@ export function Playground() {
   const visibleConversations = conversations.filter(
     (conversation) => (conversation.mode || 'chat') === mode
   )
+
+  useEffect(() => {
+    if (!isAgentMode || !helperHistoryKey) {
+      setHelperHistoryReady(false)
+      setConversationPersistenceEnabled(true)
+      return
+    }
+
+    let cancelled = false
+    setConversationPersistenceEnabled(false)
+    setHelperHistoryReady(false)
+    lastSavedHelperHistoryRef.current = ''
+
+    const load = async () => {
+      try {
+        const state = await loadHelperAgentConversations()
+        if (cancelled) return
+        replaceModeConversations(
+          'agent',
+          state.conversations,
+          state.activeConversationId
+        )
+        setHelperHistoryReady(true)
+      } catch (error) {
+        if (cancelled) return
+        toast.error(
+          error instanceof Error
+            ? error.message
+            : t('Failed to load helper conversation history')
+        )
+        setHelperHistoryReady(true)
+      }
+    }
+
+    void load()
+    return () => {
+      cancelled = true
+    }
+  }, [
+    helperHistoryKey,
+    isAgentMode,
+    replaceModeConversations,
+    setConversationPersistenceEnabled,
+    t,
+  ])
+
+  useEffect(() => {
+    if (!helperHistoryReady || !helperHistoryKey) return
+    const agentConversations = conversations.filter(
+      (conversation) => (conversation.mode || 'chat') === 'agent'
+    )
+    const activeAgentId = agentConversations.some(
+      (conversation) => conversation.id === activeConversationId
+    )
+      ? activeConversationId
+      : agentConversations[0]?.id || null
+    const serialized = JSON.stringify({
+      conversations: agentConversations,
+      activeConversationId: activeAgentId,
+    })
+    if (serialized === lastSavedHelperHistoryRef.current) return
+
+    const timer = window.setTimeout(() => {
+      lastSavedHelperHistoryRef.current = serialized
+      void saveHelperAgentConversations({
+        conversations: agentConversations,
+        activeConversationId: activeAgentId,
+      }).catch((error) => {
+        lastSavedHelperHistoryRef.current = ''
+        toast.error(
+          error instanceof Error
+            ? error.message
+            : t('Failed to save helper conversation history')
+        )
+      })
+    }, 300)
+
+    return () => window.clearTimeout(timer)
+  }, [
+    activeConversationId,
+    conversations,
+    helperHistoryKey,
+    helperHistoryReady,
+    t,
+  ])
 
   const { sendChat, stopGeneration, isGenerating } = useChatHandler({
     config,

@@ -296,6 +296,7 @@ export function PlaygroundFileSidebar({
                       key={entry.path}
                       refreshKey={refreshKey}
                       root={root}
+                      helperStatus={helperStatus}
                     />
                   ))
                 )}
