@@ -185,9 +185,12 @@ export function usePlaygroundState() {
     updateMessages([])
   }, [updateMessages])
 
-  const createNewConversation = useCallback((mode: PlaygroundMode = 'chat') => {
+  const createNewConversation = useCallback((
+    mode: PlaygroundMode = 'chat',
+    meta: Partial<Pick<PlaygroundConversation, 'workspaceName'>> = {}
+  ) => {
     setConversationState((prevState) => {
-      const conversation = createConversation([], mode)
+      const conversation = { ...createConversation([], mode), ...meta }
       const nextConversations = [conversation, ...prevState.conversations]
       return persistConversationState(nextConversations, conversation.id, {
         ...prevState.activeConversationIds,

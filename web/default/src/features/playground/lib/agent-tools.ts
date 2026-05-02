@@ -71,6 +71,20 @@ interface AgentHelperExecResponse {
   truncated?: boolean
 }
 
+interface AgentHelperFSResponse {
+  ok: boolean
+  path: string
+  output?: string
+  summary?: string
+  entries?: WorkspaceEntry[]
+  error?: string
+}
+
+export interface AgentToolRuntime {
+  root?: FileSystemDirectoryHandle
+  helper?: AgentHelperStatus | null
+}
+
 type BrowserFileSystemDirectoryHandle = FileSystemDirectoryHandle & {
   entries?: () => AsyncIterableIterator<[string, FileSystemHandle]>
 }
@@ -101,7 +115,7 @@ const SUPPORTED_TOOLS: AgentToolName[] = [
   'run_command',
 ]
 
-export const AGENT_SYSTEM_PROMPT = `你是运行在浏览器网页端的 Agent。你不能访问服务器文件系统；你只能通过用户已授权的本地工作目录使用文件工具。若本地 helper 已启动，你还可以在用户审批后调用本地命令行工具。
+export const AGENT_SYSTEM_PROMPT = `你是运行在网页端的 Agent。你不能访问服务器文件系统；你只能通过用户已授权的本地工作目录使用文件工具。若本地 helper 已连接，文件工具和命令行工具都会在 helper 工作目录内执行；否则文件工具使用浏览器目录授权。
 
 回答风格:
 - 直接、务实、像资深工程师一样给结论和关键依据。
@@ -344,20 +358,20 @@ export function getVisibleAgentContent(content: string): string {
 }
 
 export async function executeAgentToolCalls(
-  root: FileSystemDirectoryHandle,
+  runtime: AgentToolRuntime,
   calls: AgentToolCall[]
 ): Promise<AgentToolResult[]> {
   const results: AgentToolResult[] = []
 
   for (const call of calls.slice(0, MAX_TOOL_CALLS)) {
-    results.push(await executeAgentToolCall(root, call))
+    results.push(await executeAgentToolCall(runtime, call))
   }
 
   return results
 }
 
 export async function buildAgentToolReviewResults(
-  root: FileSystemDirectoryHandle,
+  runtime: AgentToolRuntime,
   calls: AgentToolCall[]
 ): Promise<AgentToolResult[]> {
   return Promise.all(
@@ -385,7 +399,7 @@ export async function buildAgentToolReviewResults(
           path,
           ok: false,
           summary: describeWriteIntent(call),
-          diff: await buildToolDiff(root, call),
+          diff: await buildToolDiff(runtime, call),
         }
       } catch (error) {
         return {
@@ -427,7 +441,7 @@ function isAgentToolCall(value: AgentToolCall): value is AgentToolCall {
 }
 
 async function executeAgentToolCall(
-  root: FileSystemDirectoryHandle,
+  runtime: AgentToolRuntime,
   call: AgentToolCall
 ): Promise<AgentToolResult> {
   const path =
@@ -436,6 +450,11 @@ async function executeAgentToolCall(
       : call.path?.trim() || '.'
 
   try {
+    if (isAgentHelperPaired(runtime.helper)) {
+      return await executeHelperToolCall(call)
+    }
+    if (!runtime.root) throw new Error('workspace_required')
+
     switch (call.tool) {
       case 'list_dir':
         return {
@@ -443,7 +462,7 @@ async function executeAgentToolCall(
           tool: call.tool,
           path,
           ok: true,
-          output: await listDir(root, path),
+          output: await listDir(runtime.root, path),
         }
       case 'read_file':
         return {
@@ -451,7 +470,7 @@ async function executeAgentToolCall(
           tool: call.tool,
           path,
           ok: true,
-          output: await readFile(root, path, {
+          output: await readFile(runtime.root, path, {
             maxBytes: call.maxBytes,
             start: call.start,
             end: call.end,
@@ -462,7 +481,7 @@ async function executeAgentToolCall(
               : 'first 100 lines read',
         }
       case 'search_files': {
-        const searchResult = await searchFiles(root, path, call.query || '', {
+        const searchResult = await searchFiles(runtime.root, path, call.query || '', {
           maxResults: call.maxResults,
         })
         return {
@@ -475,7 +494,7 @@ async function executeAgentToolCall(
         }
       }
       case 'write_file':
-        await writeFile(root, path, call.content || '')
+        await writeFile(runtime.root, path, call.content || '')
         return {
           id: call.id,
           tool: call.tool,
@@ -485,7 +504,7 @@ async function executeAgentToolCall(
           output: 'written',
         }
       case 'append_file':
-        await appendFile(root, path, call.content || '')
+        await appendFile(runtime.root, path, call.content || '')
         return {
           id: call.id,
           tool: call.tool,
@@ -495,7 +514,7 @@ async function executeAgentToolCall(
           output: 'appended',
         }
       case 'batch_edit': {
-        const editResult = await batchEditFile(root, path, call.edits || [])
+        const editResult = await batchEditFile(runtime.root, path, call.edits || [])
         return {
           id: call.id,
           tool: call.tool,
@@ -506,7 +525,7 @@ async function executeAgentToolCall(
         }
       }
       case 'create_dir':
-        await getDirectoryHandle(root, path, true)
+        await getDirectoryHandle(runtime.root, path, true)
         return {
           id: call.id,
           tool: call.tool,
@@ -620,6 +639,54 @@ async function runLocalCommand(call: AgentToolCall): Promise<AgentToolResult> {
     output: output || '(no output)',
     error: result.ok ? undefined : result.error || `exit ${result.exit_code}`,
   }
+}
+
+async function executeHelperToolCall(call: AgentToolCall): Promise<AgentToolResult> {
+  if (call.tool === 'run_command') return await runLocalCommand(call)
+
+  const path = call.path?.trim() || '.'
+  const response = await helperFSRequest({
+    op: call.tool,
+    path,
+    content: call.content || '',
+    query: call.query || '',
+    start: call.start,
+    end: call.end,
+    max_bytes: call.maxBytes,
+    max_results: call.maxResults,
+    edits: call.edits,
+  })
+
+  return {
+    id: call.id,
+    tool: call.tool,
+    path,
+    ok: response.ok,
+    summary: response.summary,
+    output: response.output,
+    error: response.ok ? undefined : response.error || 'helper_fs_failed',
+  }
+}
+
+async function helperFSRequest(body: Record<string, unknown>): Promise<AgentHelperFSResponse> {
+  const response = await fetch(`${AGENT_HELPER_BASE_URL}/v1/fs`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Xingkong-Helper-Token': getStoredAgentHelperToken(),
+    },
+    body: JSON.stringify(body),
+  })
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      setStoredAgentHelperToken('')
+      throw new Error('helper_not_paired')
+    }
+    throw new Error(`helper_fs_http_${response.status}`)
+  }
+
+  return (await response.json()) as AgentHelperFSResponse
 }
 
 function parseXmlEdits(body: string): AgentBatchEdit[] {
@@ -792,6 +859,17 @@ export async function listWorkspaceEntries(
   })
 }
 
+export async function listHelperWorkspaceEntries(
+  path: string
+): Promise<WorkspaceEntry[]> {
+  const response = await helperFSRequest({
+    op: 'list_dir',
+    path: path || '.',
+  })
+  if (!response.ok) throw new Error(response.error || 'helper_list_failed')
+  return response.entries || []
+}
+
 async function readFile(
   root: FileSystemDirectoryHandle,
   path: string,
@@ -939,7 +1017,7 @@ async function batchEditFile(
 }
 
 async function buildToolDiff(
-  root: FileSystemDirectoryHandle,
+  runtime: AgentToolRuntime,
   call: AgentToolCall
 ): Promise<string> {
   const path = call.path?.trim() || '.'
@@ -953,18 +1031,18 @@ async function buildToolDiff(
   }
 
   if (call.tool === 'append_file') {
-    const oldContent = await readWholeFileIfExists(root, path)
+    const oldContent = await readWholeFileIfExists(runtime, path)
     const nextContent = `${oldContent}${call.content || ''}`
     return buildLineDiff(oldContent, nextContent)
   }
 
   if (call.tool === 'write_file') {
-    const oldContent = await readWholeFileIfExists(root, path)
+    const oldContent = await readWholeFileIfExists(runtime, path)
     return buildLineDiff(oldContent, call.content || '')
   }
 
   if (call.tool === 'batch_edit') {
-    const oldContent = await readWholeFile(root, path)
+    const oldContent = await readWholeFileFromRuntime(runtime, path)
     const nextContent = applyBatchEditsPreview(oldContent, call.edits || [])
     return buildLineDiff(oldContent, nextContent)
   }
@@ -994,14 +1072,32 @@ function applyBatchEditsPreview(
 }
 
 async function readWholeFileIfExists(
-  root: FileSystemDirectoryHandle,
+  runtime: AgentToolRuntime,
   path: string
 ): Promise<string> {
   try {
-    return await readWholeFile(root, path)
+    return await readWholeFileFromRuntime(runtime, path)
   } catch {
     return ''
   }
+}
+
+async function readWholeFileFromRuntime(
+  runtime: AgentToolRuntime,
+  path: string
+): Promise<string> {
+  if (isAgentHelperPaired(runtime.helper)) {
+    const response = await helperFSRequest({
+      op: 'read_file',
+      path,
+      whole: true,
+      max_bytes: MAX_READ_BYTES,
+    })
+    if (!response.ok) throw new Error(response.error || 'helper_read_failed')
+    return response.output || ''
+  }
+  if (!runtime.root) throw new Error('workspace_required')
+  return readWholeFile(runtime.root, path)
 }
 
 function buildCreateDiff(_oldContent: string, nextContent: string): string {

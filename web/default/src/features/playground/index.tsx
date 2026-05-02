@@ -69,6 +69,7 @@ import {
 } from './lib'
 import type {
   AgentHelperStatus,
+  AgentToolRuntime,
   AgentToolCall,
   AgentToolName,
   AgentToolResult,
@@ -116,6 +117,11 @@ function isWorkspaceMutatingToolCall(call: AgentToolCall): boolean {
   return ['write_file', 'append_file', 'batch_edit', 'create_dir'].includes(
     call.tool
   )
+}
+
+function getHelperWorkspaceName(status: AgentHelperStatus | null): string {
+  const workspace = status?.workspace?.replace(/\\/g, '/').replace(/\/+$/, '')
+  return workspace?.split('/').filter(Boolean).pop() || 'Helper workspace'
 }
 
 const AGENT_TOOL_NAMES = new Set<AgentToolName>([
@@ -1235,6 +1241,13 @@ export function Playground() {
   const isAgentMode = mode === 'agent'
   const isHelperConnected = isAgentHelperPaired(agentHelperStatus)
   const usableHelperStatus = isHelperConnected ? agentHelperStatus : null
+  const activeWorkspaceName =
+    workspaceName ||
+    activeWorkspaceHandle?.name ||
+    (usableHelperStatus ? getHelperWorkspaceName(usableHelperStatus) : '')
+  const activeAgentRuntime: AgentToolRuntime = usableHelperStatus
+    ? { helper: usableHelperStatus }
+    : { root: activeWorkspaceHandle }
   const visibleConversations = conversations.filter(
     (conversation) => (conversation.mode || 'chat') === mode
   )
@@ -1379,6 +1392,52 @@ export function Playground() {
     return status
   }, [])
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const pairCode = params.get('xingkong_helper_pair_code')?.trim()
+    const shouldAutoStart = params.get('xingkong_helper_autostart') === '1'
+    if (!pairCode || !shouldAutoStart) return
+
+    let cancelled = false
+    const run = async () => {
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        if (cancelled) return
+        try {
+          await pairAgentHelper(pairCode)
+          const status = await refreshAgentHelperStatus()
+          if (!cancelled && isAgentHelperPaired(status)) {
+            createNewConversation('agent', {
+              workspaceName: getHelperWorkspaceName(status),
+            })
+            toast.success(t('Helper paired'))
+            params.delete('xingkong_helper_pair_code')
+            params.delete('xingkong_helper_autostart')
+            params.delete('xingkong_agent_mode')
+            const nextQuery = params.toString()
+            window.history.replaceState(
+              null,
+              '',
+              `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ''}`
+            )
+            return
+          }
+        } catch {
+          await new Promise((resolve) => window.setTimeout(resolve, 700))
+        }
+      }
+      if (!cancelled) {
+        setHelperPairCodeInput(pairCode)
+        setIsHelperPairDialogOpen(true)
+        toast.error(t('Failed to pair helper'))
+      }
+    }
+
+    void run()
+    return () => {
+      cancelled = true
+    }
+  }, [createNewConversation, refreshAgentHelperStatus, t])
+
   const handlePairHelper = useCallback(
     async (code: string) => {
       if (!code) return
@@ -1407,9 +1466,6 @@ export function Playground() {
   )
 
   const handleStartHelper = useCallback(async () => {
-    const workspace = await ensureWorkspaceForHelper()
-    if (!workspace) return
-
     const target = getAgentHelperDownloadTarget()
     setHelperManualCommand(buildAgentHelperManualCommand(target.fileName))
     launchAgentHelperProtocol()
@@ -1426,7 +1482,7 @@ export function Playground() {
         t('Helper launch failed. Start helper manually and enter the pairing code.')
       )
     }, 2000)
-  }, [ensureWorkspaceForHelper, refreshAgentHelperStatus, t])
+  }, [refreshAgentHelperStatus, t])
 
   const handleCopyManualHelperCommand = useCallback(async () => {
     if (!helperManualCommand || !navigator?.clipboard?.writeText) return
@@ -1561,7 +1617,7 @@ export function Playground() {
 
   const executeToolCallsWithApproval = useCallback(
     async (
-      workspace: FileSystemDirectoryHandle,
+      runtime: AgentToolRuntime,
       calls: AgentToolCall[],
       workingMessages: MessageType[]
     ): Promise<{ results: AgentToolResult[]; messages: MessageType[] }> => {
@@ -1606,7 +1662,7 @@ export function Playground() {
       if (!needsApproval) {
         const runningMessage = createToolMessage('running')
         updateMessages([...workingMessages, runningMessage])
-        const results = await executeAgentToolCalls(workspace, calls)
+        const results = await executeAgentToolCalls(runtime, calls)
         if (calls.some(isWorkspaceMutatingToolCall)) {
           setWorkspaceRefreshKey((value) => value + 1)
         }
@@ -1616,7 +1672,7 @@ export function Playground() {
         }
       }
 
-      const reviewResults = await buildAgentToolReviewResults(workspace, calls)
+      const reviewResults = await buildAgentToolReviewResults(runtime, calls)
       const { approvalMessage, promise } = requestToolApproval(
         calls,
         workingMessages,
@@ -1630,7 +1686,7 @@ export function Playground() {
           key: approvalMessage.key,
         }
         updateMessages([...workingMessages, runningMessage])
-        const results = await executeAgentToolCalls(workspace, calls)
+        const results = await executeAgentToolCalls(runtime, calls)
         if (calls.some(isWorkspaceMutatingToolCall)) {
           setWorkspaceRefreshKey((value) => value + 1)
         }
@@ -1663,7 +1719,7 @@ export function Playground() {
       const results =
         safeCalls.length > 0
           ? [
-              ...(await executeAgentToolCalls(workspace, safeCalls)),
+              ...(await executeAgentToolCalls(runtime, safeCalls)),
               ...deniedResults,
             ]
           : deniedResults
@@ -1686,7 +1742,8 @@ export function Playground() {
   const runAgentConversation = useCallback(
     async (
       initialMessages: MessageType[],
-      workspace: FileSystemDirectoryHandle,
+      runtime: AgentToolRuntime,
+      runtimeWorkspaceName: string,
       conversationId: string | null
     ) => {
       const control = agentStreamControlRef.current
@@ -1752,7 +1809,7 @@ export function Playground() {
               workingMessages,
               { ...config, stream: true },
               parameterEnabled,
-              workspace.name,
+              runtimeWorkspaceName,
               conversationId,
               usableHelperStatus
             )
@@ -1771,7 +1828,7 @@ export function Playground() {
           } else {
             const payload = buildChatCompletionPayload(
               [
-                createAgentSystemMessage(workspace.name, usableHelperStatus),
+                createAgentSystemMessage(runtimeWorkspaceName, usableHelperStatus),
                 ...workingMessages,
               ],
               { ...config, stream: true },
@@ -1824,7 +1881,7 @@ export function Playground() {
           if (toolCalls.length === 0) return
 
           const toolExecution = await executeToolCallsWithApproval(
-            workspace,
+            runtime,
             toolCalls,
             workingMessages
           )
@@ -1897,20 +1954,29 @@ export function Playground() {
     attachments: PlaygroundAttachment[] = []
   ) => {
     if (isAgentMode) {
-      let workspace = activeWorkspaceHandle
-      if (!workspace) {
+      let runtime = activeAgentRuntime
+      let runtimeWorkspaceName = activeWorkspaceName
+      if (!usableHelperStatus && !runtime.root) {
+        let workspace = activeWorkspaceHandle
         workspace = await pickWorkspace()
+        if (!workspace) return
+        runtime = { root: workspace }
+        runtimeWorkspaceName = workspace.name
       }
-      if (!workspace) return
       if (isAgentRunning) return
 
-      updateActiveConversationMeta({ workspaceName: workspace.name })
+      updateActiveConversationMeta({ workspaceName: runtimeWorkspaceName })
       const userMessage = createUserMessage(text, attachments)
       const assistantMessage = createLoadingAssistantMessage()
       const newMessages = [...messages, userMessage, assistantMessage]
       const conversationId = activeConversationId
       updateMessages(newMessages)
-      void runAgentConversation(newMessages, workspace, conversationId)
+      void runAgentConversation(
+        newMessages,
+        runtime,
+        runtimeWorkspaceName,
+        conversationId
+      )
       return
     }
 
@@ -2000,9 +2066,10 @@ export function Playground() {
       {isAgentMode && (
         <PlaygroundFileSidebar
           disabled={isBusy}
+          helperStatus={usableHelperStatus}
           refreshKey={workspaceRefreshKey}
           root={activeWorkspaceHandle}
-          workspaceName={workspaceName || activeWorkspaceHandle?.name}
+          workspaceName={activeWorkspaceName}
         />
       )}
 
@@ -2046,9 +2113,13 @@ export function Playground() {
                 <span className='text-muted-foreground'>
                   {activeWorkspaceHandle
                     ? t('Workspace: {{name}}', {
-                        name: workspaceName || activeWorkspaceHandle.name,
+                        name: activeWorkspaceName,
                       })
-                    : t('No workspace selected')}
+                    : usableHelperStatus
+                      ? t('Workspace: {{name}}', {
+                          name: activeWorkspaceName,
+                        })
+                      : t('No workspace selected')}
                 </span>
                 <span
                   className={cn(
@@ -2075,18 +2146,20 @@ export function Playground() {
                         ? t('Helper pairing required')
                       : t('Helper offline')}
                 </span>
-                <Button
-                  disabled={isBusy}
-                  onClick={() => void pickWorkspace()}
-                  size='sm'
-                  type='button'
-                  variant='outline'
-                >
-                  <FolderOpenIcon className='mr-2 size-4' />
-                  {activeWorkspaceHandle
-                    ? t('Change folder')
-                    : t('Select folder')}
-                </Button>
+                {!usableHelperStatus && (
+                  <Button
+                    disabled={isBusy}
+                    onClick={() => void pickWorkspace()}
+                    size='sm'
+                    type='button'
+                    variant='outline'
+                  >
+                    <FolderOpenIcon className='mr-2 size-4' />
+                    {activeWorkspaceHandle
+                      ? t('Change folder')
+                      : t('Select folder')}
+                  </Button>
+                )}
                 {!isHelperConnected && (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
