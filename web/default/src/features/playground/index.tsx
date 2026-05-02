@@ -101,6 +101,10 @@ const MAX_AGENT_STEPS = 30
 const MAX_STREAM_RETRIES = 5
 const STREAM_RETRY_DELAYS = [5000, 20000, 45000, 90000, 120000]
 
+function isUnsupportedHelperHistoryError(error: unknown): boolean {
+  return error instanceof Error && /unsupported_fs_op/i.test(error.message)
+}
+
 interface AgentStreamControl {
   source: { close: () => void } | null
   retryTimer: ReturnType<typeof setTimeout> | null
@@ -1230,6 +1234,7 @@ export function Playground() {
   const [helperManualCommand, setHelperManualCommand] = useState('')
   const [workspaceRefreshKey, setWorkspaceRefreshKey] = useState(0)
   const [helperHistoryReady, setHelperHistoryReady] = useState(false)
+  const [helperHistorySupported, setHelperHistorySupported] = useState(true)
   const lastSavedHelperHistoryRef = useRef('')
   const [isAgentRunning, setIsAgentRunning] = useState(false)
   const pendingAgentApprovalsRef = useRef<
@@ -1263,6 +1268,7 @@ export function Playground() {
   useEffect(() => {
     if (!isAgentMode || !helperHistoryKey) {
       setHelperHistoryReady(false)
+      setHelperHistorySupported(true)
       setConversationPersistenceEnabled(true)
       return
     }
@@ -1270,6 +1276,7 @@ export function Playground() {
     let cancelled = false
     setConversationPersistenceEnabled(false)
     setHelperHistoryReady(false)
+    setHelperHistorySupported(true)
     lastSavedHelperHistoryRef.current = ''
 
     const load = async () => {
@@ -1284,6 +1291,12 @@ export function Playground() {
         setHelperHistoryReady(true)
       } catch (error) {
         if (cancelled) return
+        if (isUnsupportedHelperHistoryError(error)) {
+          setHelperHistorySupported(false)
+          setConversationPersistenceEnabled(true)
+          toast.error(t('Helper is too old. Please download the latest helper.'))
+          return
+        }
         toast.error(
           error instanceof Error
             ? error.message
@@ -1306,7 +1319,7 @@ export function Playground() {
   ])
 
   useEffect(() => {
-    if (!helperHistoryReady || !helperHistoryKey) return
+    if (!helperHistoryReady || !helperHistoryKey || !helperHistorySupported) return
     const agentConversations = conversations.filter(
       (conversation) => (conversation.mode || 'chat') === 'agent'
     )
@@ -1328,6 +1341,12 @@ export function Playground() {
         activeConversationId: activeAgentId,
       }).catch((error) => {
         lastSavedHelperHistoryRef.current = ''
+        if (isUnsupportedHelperHistoryError(error)) {
+          setHelperHistorySupported(false)
+          setConversationPersistenceEnabled(true)
+          toast.error(t('Helper is too old. Please download the latest helper.'))
+          return
+        }
         toast.error(
           error instanceof Error
             ? error.message
@@ -1342,6 +1361,8 @@ export function Playground() {
     conversations,
     helperHistoryKey,
     helperHistoryReady,
+    helperHistorySupported,
+    setConversationPersistenceEnabled,
     t,
   ])
 
@@ -1489,6 +1510,7 @@ export function Playground() {
     const params = new URLSearchParams(window.location.search)
     const pairCode = params.get('xingkong_helper_pair_code')?.trim()
     const shouldAutoStart = params.get('xingkong_helper_autostart') === '1'
+    const shouldResume = params.get('xingkong_helper_resume') === '1'
     if (!pairCode || !shouldAutoStart) return
 
     let cancelled = false
@@ -1499,13 +1521,18 @@ export function Playground() {
           await pairAgentHelper(pairCode)
           const status = await refreshAgentHelperStatus()
           if (!cancelled && isAgentHelperPaired(status)) {
-            createNewConversation('agent', {
-              workspaceName: getHelperWorkspaceName(status),
-            })
+            if (shouldResume) {
+              switchMode('agent')
+            } else {
+              createNewConversation('agent', {
+                workspaceName: getHelperWorkspaceName(status),
+              })
+            }
             toast.success(t('Helper paired'))
             params.delete('xingkong_helper_pair_code')
             params.delete('xingkong_helper_autostart')
             params.delete('xingkong_agent_mode')
+            params.delete('xingkong_helper_resume')
             const nextQuery = params.toString()
             window.history.replaceState(
               null,
@@ -1529,7 +1556,7 @@ export function Playground() {
     return () => {
       cancelled = true
     }
-  }, [createNewConversation, refreshAgentHelperStatus, t])
+  }, [createNewConversation, refreshAgentHelperStatus, switchMode, t])
 
   const handlePairHelper = useCallback(
     async (code: string) => {
