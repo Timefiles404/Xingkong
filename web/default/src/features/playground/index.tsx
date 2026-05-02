@@ -35,6 +35,7 @@ import {
   getCompleteAgentToolBlockEnd,
   getAgentHelperDownloadTarget,
   getVisibleAgentContent,
+  isOpenAIFastMode,
   isOpenAIReasoningModel,
   isValidMessage,
   isFileSystemAccessSupported,
@@ -43,6 +44,7 @@ import {
   requestWorkspaceDirectory,
   requiresAgentToolApproval,
   stripAgentToolBlocks,
+  shouldUseOpenAICompatibleMode,
 } from './lib'
 import type {
   AgentHelperStatus,
@@ -456,7 +458,7 @@ function buildAgentResponsesPayload(
     }
     payload.include = ['reasoning.encrypted_content']
   }
-  if (config.openaiFastMode) {
+  if (isOpenAIFastMode(config)) {
     payload.service_tier = 'priority'
   }
 
@@ -1599,7 +1601,9 @@ export function Playground() {
       setIsAgentRunning(true)
 
       let workingMessages = initialMessages
-      const useNativeResponses = isOpenAIReasoningModel(config.model)
+      const useNativeResponses =
+        isOpenAIReasoningModel(config.model) &&
+        !shouldUseOpenAICompatibleMode(config)
 
       try {
         for (let step = 0; step < MAX_AGENT_STEPS; step += 1) {
@@ -2029,8 +2033,11 @@ export function Playground() {
           onReasoningEffortChange={(value) =>
             updateConfig('openaiReasoningEffort', value)
           }
-          fastMode={config.openaiFastMode}
-          onFastModeChange={(value) => updateConfig('openaiFastMode', value)}
+          requestMode={config.openaiRequestMode}
+          onRequestModeChange={(value) => {
+            updateConfig('openaiRequestMode', value)
+            updateConfig('openaiFastMode', value === 'fast')
+          }}
           onStop={isAgentMode ? stopAgentGeneration : stopGeneration}
           onSubmit={handleSendMessage}
           agentMode={isAgentMode}

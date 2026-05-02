@@ -42,6 +42,7 @@ import type {
   GroupOption,
   ModelOption,
   OpenAIReasoningEffort,
+  OpenAIRequestMode,
   PlaygroundAttachment,
 } from '../types'
 import {
@@ -62,8 +63,8 @@ interface PlaygroundInputProps {
   isModelLoading?: boolean
   reasoningEffort: OpenAIReasoningEffort
   onReasoningEffortChange: (value: OpenAIReasoningEffort) => void
-  fastMode: boolean
-  onFastModeChange: (value: boolean) => void
+  requestMode: OpenAIRequestMode
+  onRequestModeChange: (value: OpenAIRequestMode) => void
   groups: GroupOption[]
   groupValue: string
   onGroupChange: (value: string) => void
@@ -493,19 +494,43 @@ function OpenAIRequestControls({
   disabled = false,
   reasoningEffort,
   onReasoningEffortChange,
-  fastMode,
-  onFastModeChange,
+  requestMode,
+  onRequestModeChange,
 }: {
   disabled?: boolean
   reasoningEffort: OpenAIReasoningEffort
   onReasoningEffortChange: (value: OpenAIReasoningEffort) => void
-  fastMode: boolean
-  onFastModeChange: (value: boolean) => void
+  requestMode: OpenAIRequestMode
+  onRequestModeChange: (value: OpenAIRequestMode) => void
 }) {
   const { t } = useTranslation()
   const selectedEffort =
     REASONING_EFFORT_OPTIONS.find((item) => item.value === reasoningEffort) ||
     REASONING_EFFORT_OPTIONS[3]
+  const requestModeOptions: Array<{
+    value: OpenAIRequestMode
+    label: string
+    description: string
+  }> = [
+    {
+      value: 'standard',
+      label: 'Standard mode',
+      description: 'Use Responses endpoint when available',
+    },
+    {
+      value: 'fast',
+      label: 'Fast mode',
+      description: 'Request priority/fast service tier',
+    },
+    {
+      value: 'compatible',
+      label: 'OpenAI compatible mode',
+      description: 'Use Chat Completions and XML tools',
+    },
+  ]
+  const selectedRequestMode =
+    requestModeOptions.find((item) => item.value === requestMode) ||
+    requestModeOptions[0]
 
   return (
     <>
@@ -541,19 +566,41 @@ function OpenAIRequestControls({
         </DropdownMenuContent>
       </DropdownMenu>
 
-      <PromptInputButton
-        aria-pressed={fastMode}
-        className='!rounded-full border font-medium data-[state=on]:bg-primary data-[state=on]:text-primary-foreground'
-        data-state={fastMode ? 'on' : 'off'}
-        disabled={disabled}
-        onClick={() => onFastModeChange(!fastMode)}
-        type='button'
-        variant={fastMode ? 'secondary' : 'outline'}
-      >
-        <GaugeIcon size={16} />
-        <span className='hidden sm:inline'>{t('Fast mode')}</span>
-        <span className='sr-only sm:hidden'>{t('Fast mode')}</span>
-      </PromptInputButton>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <PromptInputButton
+            className='!rounded-full border font-medium'
+            disabled={disabled}
+            type='button'
+            variant={requestMode === 'standard' ? 'outline' : 'secondary'}
+          >
+            <GaugeIcon size={16} />
+            <span className='hidden sm:inline'>{t(selectedRequestMode.label)}</span>
+            <span className='sr-only sm:hidden'>{t('Request mode')}</span>
+            <ChevronDownIcon className='hidden size-4 sm:block' />
+          </PromptInputButton>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align='end' className='w-64'>
+          <DropdownMenuLabel>{t('Request mode')}</DropdownMenuLabel>
+          <DropdownMenuRadioGroup
+            value={requestMode}
+            onValueChange={(value) =>
+              onRequestModeChange(value as OpenAIRequestMode)
+            }
+          >
+            {requestModeOptions.map((option) => (
+              <DropdownMenuRadioItem key={option.value} value={option.value}>
+                <div className='grid gap-0.5'>
+                  <span>{t(option.label)}</span>
+                  <span className='text-muted-foreground text-xs'>
+                    {t(option.description)}
+                  </span>
+                </div>
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </>
   )
 }
@@ -569,8 +616,8 @@ export function PlaygroundInput({
   isModelLoading = false,
   reasoningEffort,
   onReasoningEffortChange,
-  fastMode,
-  onFastModeChange,
+  requestMode,
+  onRequestModeChange,
   groups,
   groupValue,
   onGroupChange,
@@ -668,8 +715,8 @@ export function PlaygroundInput({
                 disabled={disabled}
                 reasoningEffort={reasoningEffort}
                 onReasoningEffortChange={onReasoningEffortChange}
-                fastMode={fastMode}
-                onFastModeChange={onFastModeChange}
+                requestMode={requestMode}
+                onRequestModeChange={onRequestModeChange}
               />
             )}
 

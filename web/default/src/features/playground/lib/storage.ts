@@ -30,7 +30,12 @@ export function loadConfig(): Partial<PlaygroundConfig> {
   try {
     const saved = localStorage.getItem(STORAGE_KEYS.CONFIG)
     if (saved) {
-      return JSON.parse(saved)
+      const parsed = JSON.parse(saved) as Partial<PlaygroundConfig>
+      if (!parsed.openaiRequestMode) {
+        parsed.openaiRequestMode = parsed.openaiFastMode ? 'fast' : 'standard'
+      }
+      parsed.openaiFastMode = parsed.openaiRequestMode === 'fast'
+      return parsed
     }
   } catch (error) {
     // eslint-disable-next-line no-console

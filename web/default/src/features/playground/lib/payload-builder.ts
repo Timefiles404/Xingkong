@@ -21,6 +21,18 @@ export function isOpenAIReasoningModel(model: string): boolean {
   )
 }
 
+export function shouldUseOpenAICompatibleMode(
+  config: PlaygroundConfig
+): boolean {
+  return config.openaiRequestMode === 'compatible'
+}
+
+export function isOpenAIFastMode(config: PlaygroundConfig): boolean {
+  return config.openaiRequestMode
+    ? config.openaiRequestMode === 'fast'
+    : config.openaiFastMode
+}
+
 /**
  * Build API request payload from messages and config
  */
@@ -42,14 +54,17 @@ export function buildChatCompletionPayload(
     stream: config.stream,
   }
 
-  if (isOpenAIReasoningModel(config.model)) {
+  if (
+    isOpenAIReasoningModel(config.model) &&
+    !shouldUseOpenAICompatibleMode(config)
+  ) {
     if (options.promptCacheKey) {
       payload.prompt_cache_key = options.promptCacheKey
     }
     if (config.openaiReasoningEffort !== 'none') {
       payload.reasoning_effort = config.openaiReasoningEffort
     }
-    if (config.openaiFastMode) {
+    if (isOpenAIFastMode(config)) {
       payload.service_tier = 'fast'
     }
   }

@@ -30,6 +30,7 @@ export const DEFAULT_CONFIG: PlaygroundConfig = {
   model: 'gpt-4o',
   group: DEFAULT_GROUP,
   openaiReasoningEffort: 'medium',
+  openaiRequestMode: 'standard',
   openaiFastMode: false,
   temperature: 0.7,
   top_p: 1,
