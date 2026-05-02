@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react'
 import {
   CheckIcon,
   ChevronDownIcon,
@@ -8,6 +8,8 @@ import {
   PaperclipIcon,
   ScreenShareIcon,
   CameraIcon,
+  GaugeIcon,
+  BrainCircuitIcon,
   SendIcon,
   SquareIcon,
 } from 'lucide-react'
@@ -18,6 +20,9 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import {
@@ -36,8 +41,15 @@ import { ModelGroupSelector } from '@/components/model-group-selector'
 import type {
   GroupOption,
   ModelOption,
+  OpenAIReasoningEffort,
   PlaygroundAttachment,
 } from '../types'
+import {
+  formatFileReference,
+  getFileNameFromPath,
+  isOpenAIReasoningModel,
+  parseFileReferenceHref,
+} from '../lib'
 
 interface PlaygroundInputProps {
   onSubmit: (text: string, attachments: PlaygroundAttachment[]) => void
@@ -48,14 +60,31 @@ interface PlaygroundInputProps {
   modelValue: string
   onModelChange: (value: string) => void
   isModelLoading?: boolean
+  reasoningEffort: OpenAIReasoningEffort
+  onReasoningEffortChange: (value: OpenAIReasoningEffort) => void
+  fastMode: boolean
+  onFastModeChange: (value: boolean) => void
   groups: GroupOption[]
   groupValue: string
   onGroupChange: (value: string) => void
+  agentMode?: boolean
 }
 
 const TEXT_FILE_ACCEPT =
   '.txt,.md,.markdown,.json,.jsonl,.csv,.tsv,.yaml,.yml,.xml,.html,.css,.scss,.js,.jsx,.ts,.tsx,.py,.go,.java,.c,.cpp,.h,.hpp,.rs,.sh,.sql,.log'
 const MAX_FILE_SIZE = 5 * 1024 * 1024
+
+const REASONING_EFFORT_OPTIONS: Array<{
+  value: OpenAIReasoningEffort
+  label: string
+}> = [
+  { value: 'none', label: 'Off' },
+  { value: 'minimal', label: 'Minimal' },
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+  { value: 'xhigh', label: 'Extra high' },
+]
 
 function isTextLikeFile(file: FileUIPart): boolean {
   const mimeType = file.mediaType || ''
@@ -158,6 +187,142 @@ function SubmitActionButton({
       <span className='hidden sm:inline'>{t('Send')}</span>
       <span className='sr-only sm:hidden'>{t('Send')}</span>
     </PromptInputButton>
+  )
+}
+
+function serializeAgentEditor(root: HTMLDivElement | null): string {
+  if (!root) return ''
+
+  const serializeNode = (node: ChildNode): string => {
+    if (node.nodeType === Node.TEXT_NODE) return node.textContent || ''
+    if (!(node instanceof HTMLElement)) return node.textContent || ''
+
+    const filePath = node.dataset.filePath
+    if (filePath) return formatFileReference(filePath)
+    if (node.tagName === 'BR') return '\n'
+
+    const childText = Array.from(node.childNodes).map(serializeNode).join('')
+    if (node.tagName === 'DIV' || node.tagName === 'P') return `${childText}\n`
+    return childText
+  }
+
+  return Array.from(root.childNodes).map(serializeNode).join('').trim()
+}
+
+function getFileTokenIcon(kind?: string): string {
+  if (kind === 'directory') {
+    return `<svg aria-hidden="true" viewBox="0 0 24 24" class="size-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>`
+  }
+  return `<svg aria-hidden="true" viewBox="0 0 24 24" class="size-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></svg>`
+}
+
+function createFileToken(path: string, kind?: string): HTMLSpanElement {
+  const token = document.createElement('span')
+  token.contentEditable = 'false'
+  token.dataset.filePath = path
+  token.dataset.fileKind = kind || 'file'
+  token.className =
+    'mx-0.5 inline-flex max-w-[14rem] select-all items-center gap-1 rounded-[5px] border bg-muted px-1.5 py-0.5 align-baseline text-xs font-medium text-foreground shadow-xs'
+  token.innerHTML = `${getFileTokenIcon(kind)}<span class="truncate">${getFileNameFromPath(path)}</span>`
+  token.title = path
+  return token
+}
+
+function insertNodeAtSelection(node: Node) {
+  const selection = window.getSelection()
+  if (!selection || selection.rangeCount === 0) return
+  const range = selection.getRangeAt(0)
+  range.deleteContents()
+  range.insertNode(document.createTextNode(' '))
+  range.insertNode(node)
+  range.insertNode(document.createTextNode(' '))
+  range.collapse(false)
+  selection.removeAllRanges()
+  selection.addRange(range)
+}
+
+function getDroppedFileEntry(
+  event: DragEvent<HTMLDivElement>
+): { path: string; kind?: string } | null {
+  const direct = event.dataTransfer.getData('application/x-newapi-file-path')
+  const kind = event.dataTransfer.getData('application/x-newapi-file-kind')
+  if (direct) return { path: direct, kind }
+  const text = event.dataTransfer.getData('text/plain')
+  const markdownHref = text.match(/\]\((file:\/\/[^)]+)\)/i)?.[1]
+  const path = parseFileReferenceHref(markdownHref) || parseFileReferenceHref(text)
+  return path ? { path } : null
+}
+
+function AgentPromptEditor({
+  disabled = false,
+  value,
+  onChange,
+  placeholder,
+}: {
+  disabled?: boolean
+  value: string
+  onChange: (value: string) => void
+  placeholder: string
+}) {
+  const editorRef = useRef<HTMLDivElement | null>(null)
+  const [isEmpty, setIsEmpty] = useState(true)
+
+  const syncValue = useCallback(() => {
+    const nextValue = serializeAgentEditor(editorRef.current)
+    onChange(nextValue)
+    setIsEmpty(!nextValue)
+  }, [onChange])
+
+  useEffect(() => {
+    if (value) return
+    if (editorRef.current && editorRef.current.textContent) {
+      editorRef.current.innerHTML = ''
+      setIsEmpty(true)
+    }
+  }, [value])
+
+  return (
+    <div className='relative w-full min-w-0 self-stretch px-5 py-3'>
+      {isEmpty && (
+        <div className='text-muted-foreground pointer-events-none absolute top-3 left-5 text-base'>
+          {placeholder}
+        </div>
+      )}
+      <div
+        aria-label={placeholder}
+        className='max-h-48 min-h-16 w-full min-w-0 overflow-y-auto whitespace-pre-wrap break-words text-base leading-6 outline-none empty:min-h-16'
+        contentEditable={!disabled}
+        onBlur={syncValue}
+        onDragOver={(event) => {
+          if (getDroppedFileEntry(event)) event.preventDefault()
+        }}
+        onDrop={(event) => {
+          const entry = getDroppedFileEntry(event)
+          if (!entry) return
+          event.preventDefault()
+          insertNodeAtSelection(createFileToken(entry.path, entry.kind))
+          syncValue()
+        }}
+        onInput={syncValue}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault()
+            editorRef.current?.closest('form')?.requestSubmit()
+          }
+        }}
+        onPaste={(event) => {
+          const text = event.clipboardData.getData('text/plain')
+          if (!text) return
+          event.preventDefault()
+          document.execCommand('insertText', false, text)
+          syncValue()
+        }}
+        ref={editorRef}
+        role='textbox'
+        spellCheck={false}
+        suppressContentEditableWarning
+      />
+    </div>
   )
 }
 
@@ -324,6 +489,75 @@ function AttachmentMenu({
   )
 }
 
+function OpenAIRequestControls({
+  disabled = false,
+  reasoningEffort,
+  onReasoningEffortChange,
+  fastMode,
+  onFastModeChange,
+}: {
+  disabled?: boolean
+  reasoningEffort: OpenAIReasoningEffort
+  onReasoningEffortChange: (value: OpenAIReasoningEffort) => void
+  fastMode: boolean
+  onFastModeChange: (value: boolean) => void
+}) {
+  const { t } = useTranslation()
+  const selectedEffort =
+    REASONING_EFFORT_OPTIONS.find((item) => item.value === reasoningEffort) ||
+    REASONING_EFFORT_OPTIONS[3]
+
+  return (
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <PromptInputButton
+            className='!rounded-full border font-medium'
+            disabled={disabled}
+            variant='outline'
+          >
+            <BrainCircuitIcon size={16} />
+            <span className='hidden sm:inline'>
+              {t('Reasoning')}: {t(selectedEffort.label)}
+            </span>
+            <span className='sr-only sm:hidden'>{t('Reasoning')}</span>
+            <ChevronDownIcon className='hidden size-4 sm:block' />
+          </PromptInputButton>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align='end'>
+          <DropdownMenuLabel>{t('Reasoning effort')}</DropdownMenuLabel>
+          <DropdownMenuRadioGroup
+            value={reasoningEffort}
+            onValueChange={(value) =>
+              onReasoningEffortChange(value as OpenAIReasoningEffort)
+            }
+          >
+            {REASONING_EFFORT_OPTIONS.map((option) => (
+              <DropdownMenuRadioItem key={option.value} value={option.value}>
+                {t(option.label)}
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      <PromptInputButton
+        aria-pressed={fastMode}
+        className='!rounded-full border font-medium data-[state=on]:bg-primary data-[state=on]:text-primary-foreground'
+        data-state={fastMode ? 'on' : 'off'}
+        disabled={disabled}
+        onClick={() => onFastModeChange(!fastMode)}
+        type='button'
+        variant={fastMode ? 'secondary' : 'outline'}
+      >
+        <GaugeIcon size={16} />
+        <span className='hidden sm:inline'>{t('Fast mode')}</span>
+        <span className='sr-only sm:hidden'>{t('Fast mode')}</span>
+      </PromptInputButton>
+    </>
+  )
+}
+
 export function PlaygroundInput({
   onSubmit,
   onStop,
@@ -333,9 +567,14 @@ export function PlaygroundInput({
   modelValue,
   onModelChange,
   isModelLoading = false,
+  reasoningEffort,
+  onReasoningEffortChange,
+  fastMode,
+  onFastModeChange,
   groups,
   groupValue,
   onGroupChange,
+  agentMode = false,
 }: PlaygroundInputProps) {
   const { t } = useTranslation()
   const [text, setText] = useState('')
@@ -343,6 +582,7 @@ export function PlaygroundInput({
   const isModelSelectDisabled =
     disabled || isModelLoading || models.length === 0
   const isGroupSelectDisabled = disabled || groups.length === 0
+  const showOpenAIControls = isOpenAIReasoningModel(modelValue)
 
   const handleSubmit = async (message: PromptInputMessage) => {
     const trimmedText = message.text?.trim() || ''
@@ -383,12 +623,20 @@ export function PlaygroundInput({
           autoCorrect='off'
           autoCapitalize='off'
           spellCheck={false}
-          className='px-5 md:text-base'
+          className={agentMode ? 'hidden' : 'px-5 md:text-base'}
           disabled={disabled}
           onChange={(event) => setText(event.target.value)}
           placeholder={t('Ask anything')}
           value={text}
         />
+        {agentMode && (
+          <AgentPromptEditor
+            disabled={disabled}
+            onChange={setText}
+            placeholder={t('Ask anything')}
+            value={text}
+          />
+        )}
 
         <PromptInputFooter className='p-2.5'>
           <PromptInputTools>
@@ -414,6 +662,16 @@ export function PlaygroundInput({
               onGroupChange={onGroupChange}
               disabled={isModelSelectDisabled || isGroupSelectDisabled}
             />
+
+            {showOpenAIControls && (
+              <OpenAIRequestControls
+                disabled={disabled}
+                reasoningEffort={reasoningEffort}
+                onReasoningEffortChange={onReasoningEffortChange}
+                fastMode={fastMode}
+                onFastModeChange={onFastModeChange}
+              />
+            )}
 
             <SubmitActionButton
               disabled={disabled}

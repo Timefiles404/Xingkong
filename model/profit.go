@@ -1264,7 +1264,16 @@ func calculateUpstreamCostUSD(pricing *profitPricingConfig, promptTokens int64, 
 	if pricing.CacheRatio != nil {
 		cachePrice = promptPrice * *pricing.CacheRatio
 	}
-	cost := (float64(promptTokens) / 1_000_000.0) * promptPrice
+
+	// Upstream prompt_tokens usually already includes cache-read / cache-write tokens.
+	// Remove them from the base prompt bucket first, then add the cache buckets back
+	// with their own pricing rules to avoid double charging cached traffic.
+	basePromptTokens := promptTokens - cacheReadTokens - cacheWriteTokens
+	if basePromptTokens < 0 {
+		basePromptTokens = 0
+	}
+
+	cost := (float64(basePromptTokens) / 1_000_000.0) * promptPrice
 	cost += (float64(completionTokens) / 1_000_000.0) * completionPrice
 	cost += (float64(cacheReadTokens) / 1_000_000.0) * cachePrice
 	if cacheWriteTokens > 0 {

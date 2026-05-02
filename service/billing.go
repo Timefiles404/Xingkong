@@ -2,8 +2,11 @@ package service
 
 import (
 	"fmt"
+	"net/http"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -12,7 +15,47 @@ import (
 const (
 	BillingSourceWallet       = "wallet"
 	BillingSourceSubscription = "subscription"
+
+	apiWalletOnlyMinUSD = 4.0
 )
+
+// EnforceLowBalanceAPIRestriction blocks direct API usage for low-balance users
+// without an active subscription. Playground requests are intentionally allowed.
+func EnforceLowBalanceAPIRestriction(c *gin.Context, relayInfo *relaycommon.RelayInfo) *types.NewAPIError {
+	if relayInfo == nil || relayInfo.UserId <= 0 || relayInfo.IsPlayground {
+		return nil
+	}
+	if model.IsAdmin(relayInfo.UserId) {
+		return nil
+	}
+
+	userQuota, err := model.GetUserQuota(relayInfo.UserId, false)
+	if err != nil {
+		return types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
+	}
+	relayInfo.UserQuota = userQuota
+
+	minQuota := int(apiWalletOnlyMinUSD * common.QuotaPerUnit)
+	if userQuota >= minQuota {
+		return nil
+	}
+
+	hasActiveSubscription, err := model.HasActiveUserSubscription(relayInfo.UserId)
+	if err != nil {
+		return types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
+	}
+	if hasActiveSubscription {
+		return nil
+	}
+
+	return types.NewErrorWithStatusCode(
+		fmt.Errorf("账户余额低于 %.0f USD 且没有生效订阅，暂不可直接使用 API；请在模型测试板块使用，或充值/订阅后再使用 API", apiWalletOnlyMinUSD),
+		types.ErrorCodeInsufficientUserQuota,
+		http.StatusForbidden,
+		types.ErrOptionWithSkipRetry(),
+		types.ErrOptionWithNoRecordErrorLog(),
+	)
+}
 
 // PreConsumeBilling 根据用户计费偏好创建 BillingSession 并执行预扣费。
 // 会话存储在 relayInfo.Billing 上，供后续 Settle / Refund 使用。

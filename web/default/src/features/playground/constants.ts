@@ -17,6 +17,7 @@ export const MESSAGE_STATUS = {
 // API endpoints
 export const API_ENDPOINTS = {
   CHAT_COMPLETIONS: '/pg/chat/completions',
+  RESPONSES: '/pg/responses',
   USER_MODELS: '/api/user/models',
   USER_GROUPS: '/api/user/self/groups',
 } as const
@@ -28,6 +29,8 @@ export const DEFAULT_GROUP = 'default' as const
 export const DEFAULT_CONFIG: PlaygroundConfig = {
   model: 'gpt-4o',
   group: DEFAULT_GROUP,
+  openaiReasoningEffort: 'medium',
+  openaiFastMode: false,
   temperature: 0.7,
   top_p: 1,
   max_tokens: 4096,
@@ -52,6 +55,8 @@ export const STORAGE_KEYS = {
   MESSAGES: 'playground_messages',
   CONVERSATIONS: 'playground_conversations',
   ACTIVE_CONVERSATION_ID: 'playground_active_conversation_id',
+  ACTIVE_CHAT_CONVERSATION_ID: 'playground_active_chat_conversation_id',
+  ACTIVE_AGENT_CONVERSATION_ID: 'playground_active_agent_conversation_id',
   PARAMETER_ENABLED: 'playground_parameter_enabled',
 } as const
 

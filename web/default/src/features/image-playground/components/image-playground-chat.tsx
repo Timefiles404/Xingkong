@@ -16,7 +16,7 @@ function LoadingCard() {
   const { t } = useTranslation()
 
   return (
-    <div className='bg-background w-full max-w-3xl rounded-3xl border p-5 shadow-sm'>
+    <div className='bg-background w-fit max-w-full rounded-2xl border p-4 shadow-sm'>
       <div className='flex items-center gap-2 text-sm font-medium'>
         <SparklesIcon className='text-primary size-4 animate-pulse' />
         <span>{t('Generating image')}</span>
@@ -25,7 +25,7 @@ function LoadingCard() {
         {t('This usually takes 60 to 180 seconds.')}
       </p>
       <div className='mt-4'>
-        <div className='from-primary/10 via-primary/20 to-primary/10 aspect-square max-w-xl animate-pulse rounded-3xl border bg-gradient-to-br' />
+        <div className='from-primary/10 via-primary/20 to-primary/10 aspect-square w-[min(30rem,calc(100vw-4rem))] animate-pulse rounded-2xl border bg-gradient-to-br' />
       </div>
     </div>
   )
@@ -47,8 +47,14 @@ export function ImagePlaygroundChat({ messages }: ImagePlaygroundChatProps) {
               >
                 <div
                   className={cn(
-                    'w-full max-w-3xl rounded-3xl border p-5 shadow-sm',
-                    isUser ? 'bg-primary/5 border-primary/10' : 'bg-background'
+                    'rounded-2xl border shadow-sm',
+                    isUser
+                      ? 'bg-primary/5 border-primary/10 w-full max-w-3xl p-5'
+                      : message.status === 'complete'
+                        ? 'bg-background w-fit max-w-full p-3'
+                        : message.status === 'loading'
+                          ? 'w-fit max-w-full border-transparent bg-transparent p-0 shadow-none'
+                        : 'bg-background w-fit max-w-full p-0'
                   )}
                 >
                   {isUser ? (
@@ -80,7 +86,7 @@ export function ImagePlaygroundChat({ messages }: ImagePlaygroundChatProps) {
                   ) : message.status === 'loading' ? (
                     <LoadingCard />
                   ) : message.status === 'error' ? (
-                    <div className='space-y-2'>
+                    <div className='max-w-3xl space-y-2 p-5'>
                       <div className='text-sm font-medium text-red-500'>
                         {t('Image generation failed')}
                       </div>
@@ -93,20 +99,20 @@ export function ImagePlaygroundChat({ messages }: ImagePlaygroundChatProps) {
                       {!!message.images?.length && (
                         <div
                           className={cn(
-                            'grid gap-4',
+                            'grid max-w-full gap-3',
                             message.images.length > 1
-                              ? 'sm:grid-cols-2'
-                              : 'max-w-xl'
+                              ? 'w-full sm:grid-cols-2'
+                              : 'w-fit'
                           )}
                         >
                           {message.images.map((image) => (
                             <div
-                              className='bg-background overflow-hidden rounded-3xl border'
+                              className='bg-background w-fit max-w-full overflow-hidden rounded-2xl border'
                               key={image.id}
                             >
                               <img
                                 alt={image.revisedPrompt || t('Generated image')}
-                                className='aspect-square w-full object-cover'
+                                className='aspect-square w-[min(34rem,calc(100vw-4rem))] max-w-full object-cover'
                                 src={image.url}
                               />
                               {image.revisedPrompt && (
@@ -137,7 +143,7 @@ export function ImagePlaygroundChat({ messages }: ImagePlaygroundChatProps) {
                         </div>
                       )}
                       {!message.images?.length && (
-                        <div className='text-muted-foreground text-sm'>
+                        <div className='text-muted-foreground p-5 text-sm'>
                           {t('No image was returned.')}
                         </div>
                       )}

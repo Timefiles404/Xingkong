@@ -423,6 +423,12 @@ export function ModelMutateDrawer({
     const model = modelData?.data
     if (!model) return
 
+    const needsSystemPricingSettings =
+      drawerMode === 'create' || drawerMode === 'pricing' || drawerMode === 'basic'
+    if (needsSystemPricingSettings && !modelSettings) {
+      return
+    }
+
     setOldModelName(model.model_name)
     setBoundChannels(model.bound_channels || [])
 
@@ -505,11 +511,10 @@ export function ModelMutateDrawer({
         currentPricing?.cacheRatio !== undefined
           ? String(currentPricing.cacheRatio)
           : ''
-      nextValues.modelGroupRatio = JSON.stringify(
-        modelGroupRatioMap[modelName] || {},
-        null,
-        2
-      )
+      nextValues.modelGroupRatio =
+        drawerMode === 'upstream-pricing'
+          ? ''
+          : JSON.stringify(modelGroupRatioMap[modelName] || {}, null, 2)
       nextValues.price = ''
 
       if (currentPricing?.ratio !== undefined) {
@@ -1283,35 +1288,37 @@ export function ModelMutateDrawer({
                         </CollapsibleContent>
                       </Collapsible>
 
-                      <FormField
-                        control={form.control}
-                        name='modelGroupRatio'
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>{t('Group Multipliers')}</FormLabel>
-                            <FormControl>
-                              <JsonEditor
-                                value={field.value || ''}
-                                onChange={field.onChange}
-                                keyPlaceholder='default'
-                                valuePlaceholder='5'
-                                keyLabel={t('User token group')}
-                                valueLabel={t('Multiplier')}
-                                valueType='number'
-                                emptyMessage={t(
-                                  'Optional. Configure per-token-group multipliers for this model.'
+                      {!showUpstreamPricingSection && (
+                        <FormField
+                          control={form.control}
+                          name='modelGroupRatio'
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>{t('Group Multipliers')}</FormLabel>
+                              <FormControl>
+                                <JsonEditor
+                                  value={field.value || ''}
+                                  onChange={field.onChange}
+                                  keyPlaceholder='default'
+                                  valuePlaceholder='5'
+                                  keyLabel={t('User token group')}
+                                  valueLabel={t('Multiplier')}
+                                  valueType='number'
+                                  emptyMessage={t(
+                                    'Optional. Configure per-token-group multipliers for this model.'
+                                  )}
+                                />
+                              </FormControl>
+                              <FormDescription>
+                                {t(
+                                  'Final charge multiplier = system group multiplier × model group multiplier.'
                                 )}
-                              />
-                            </FormControl>
-                            <FormDescription>
-                              {t(
-                                'Final charge multiplier = system group multiplier × model group multiplier.'
-                              )}
-                            </FormDescription>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
+                              </FormDescription>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                      )}
                     </>
                   )}
 

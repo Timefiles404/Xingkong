@@ -130,7 +130,8 @@ export function formatMessageForAPI(message: Message): ChatCompletionMessage {
         `[Attachment: ${attachment.name}]\n${attachment.textContent?.trim() || ''}`
     )
     .join('\n\n')
-  const mergedText = [currentVersion.content.trim(), attachmentText]
+  const baseContent = message.apiContent ?? currentVersion.content
+  const mergedText = [baseContent.trim(), attachmentText]
     .filter(Boolean)
     .join('\n\n')
 
@@ -152,7 +153,7 @@ export function formatMessageForAPI(message: Message): ChatCompletionMessage {
 export function isValidMessage(message: Message): boolean {
   if (!message || !message.from || !message.versions.length) return false
 
-  const content = message.versions[0]?.content
+  const content = message.apiContent ?? message.versions[0]?.content
   if (content === undefined) return false
 
   // Exclude empty assistant messages (loading/streaming placeholders)

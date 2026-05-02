@@ -1,11 +1,5 @@
 import { useMemo, useState } from 'react'
-import {
-  HistoryIcon,
-  MessageSquareIcon,
-  PanelRightIcon,
-  PlusIcon,
-  Trash2Icon,
-} from 'lucide-react'
+import { HistoryIcon, PanelRightIcon, PlusIcon, Trash2Icon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { cn } from '@/lib/utils'
@@ -23,20 +17,11 @@ import type { PlaygroundConversation } from '../types'
 
 interface PlaygroundHistorySidebarProps {
   conversations: PlaygroundConversation[]
-  activeConversationId: string
+  activeConversationId: string | null
   isGenerating?: boolean
   onCreateConversation: () => void
   onSelectConversation: (conversationId: string) => void
   onDeleteConversation: (conversationId: string) => void
-}
-
-function formatConversationTime(timestamp: number): string {
-  return new Intl.DateTimeFormat(undefined, {
-    month: 'numeric',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(timestamp)
 }
 
 function ConversationList({
@@ -48,6 +33,25 @@ function ConversationList({
   onDeleteConversation,
 }: PlaygroundHistorySidebarProps) {
   const { t } = useTranslation()
+  const getDisplayTitle = (conversation: PlaygroundConversation) => {
+    const lastUserMessage = [...conversation.messages]
+      .reverse()
+      .find((message) => {
+        if (message.from !== 'user') return false
+        if (message.isAgentToolResult) return false
+        const content = message.versions?.[0]?.content || ''
+        return !/<agent_tool_results\b/i.test(content)
+      })
+    const text = lastUserMessage?.versions?.[0]?.content
+      ?.replace(/\s+/g, ' ')
+      .trim()
+    if (text) return text
+    const attachment = lastUserMessage?.attachments?.[0]?.name
+    const fallbackTitle = /<agent_tool_results\b/i.test(conversation.title || '')
+      ? ''
+      : conversation.title
+    return attachment || fallbackTitle || t('New conversation')
+  }
   const sortedConversations = useMemo(
     () =>
       [...conversations].sort((a, b) => {
@@ -57,16 +61,13 @@ function ConversationList({
   )
 
   return (
-    <div className='flex h-full flex-col'>
-      <div className='flex items-center justify-between gap-2 border-b px-4 py-4'>
-        <div className='space-y-1'>
+    <div className='flex h-full min-h-0 flex-col'>
+      <div className='flex shrink-0 items-center justify-between gap-2 border-b px-3 py-3'>
+        <div className='min-w-0'>
           <h3 className='text-sm font-semibold'>{t('Conversation history')}</h3>
-          <p className='text-muted-foreground text-xs'>
-            {t('Saved only on this device.')}
-          </p>
         </div>
         <Button
-          className='rounded-full'
+          className='size-8 rounded-full'
           disabled={isGenerating}
           onClick={onCreateConversation}
           size='icon'
@@ -77,53 +78,36 @@ function ConversationList({
         </Button>
       </div>
 
-      <ScrollArea className='min-h-0 flex-1'>
-        <div className='space-y-2 p-3'>
+      <ScrollArea className='h-full min-h-0 flex-1'>
+        <div className='space-y-1.5 p-2'>
           {sortedConversations.map((conversation) => {
-            const preview =
-              conversation.messages[0]?.versions?.[0]?.content?.trim() ||
-              conversation.messages[0]?.attachments?.[0]?.name ||
-              t('Start a fresh conversation')
             const isActive = conversation.id === activeConversationId
             return (
               <div
                 className={cn(
-                  'w-full rounded-2xl border px-3 py-3 text-left transition-colors',
+                  'w-full max-w-full overflow-hidden rounded-lg border px-2.5 py-1.5 text-left transition-colors',
                   isActive
                     ? 'bg-accent border-primary/20'
                     : 'bg-background hover:bg-accent/60'
                 )}
                 key={conversation.id}
               >
-                <div className='flex items-start justify-between gap-3'>
+                <div className='flex items-center justify-between gap-2'>
                   <button
-                    className='min-w-0 flex-1 space-y-1 text-left'
+                    className='min-w-0 flex-1 overflow-hidden text-left'
                     disabled={isGenerating}
                     onClick={() => onSelectConversation(conversation.id)}
                     type='button'
                   >
-                    <div className='flex items-center gap-2'>
-                      <MessageSquareIcon className='text-muted-foreground size-3.5 shrink-0' />
-                      <span className='truncate text-sm font-medium'>
-                        {conversation.title || t('New conversation')}
-                      </span>
-                    </div>
-                    <p className='text-muted-foreground line-clamp-2 text-xs leading-5 break-all'>
-                      {preview}
-                    </p>
-                    <div className='text-muted-foreground flex items-center gap-2 text-[11px]'>
-                      <span>{formatConversationTime(conversation.updatedAt)}</span>
-                      <span>·</span>
-                      <span>
-                        {t('{{count}} messages', {
-                          count: conversation.messages.length,
-                        })}
+                    <div className='flex min-w-0 items-center overflow-hidden'>
+                      <span className='line-clamp-2 min-w-0 break-all text-xs leading-4 font-medium'>
+                        {getDisplayTitle(conversation)}
                       </span>
                     </div>
                   </button>
 
                   <Button
-                    className='size-8 shrink-0 rounded-full'
+                    className='size-7 shrink-0 rounded-full opacity-70 hover:opacity-100'
                     disabled={isGenerating || conversations.length <= 1}
                     onClick={(event) => {
                       event.stopPropagation()
@@ -179,7 +163,7 @@ export function PlaygroundHistorySidebar(
 
   return (
     <div className='pointer-events-none absolute inset-y-0 right-0 z-20 hidden pr-4 lg:flex'>
-      <div className='pointer-events-auto flex items-start gap-3 py-4'>
+      <div className='pointer-events-auto flex h-full min-h-0 items-start gap-3 py-4'>
         {!open && (
           <Button
             className='mt-2 rounded-full shadow-sm'
@@ -193,14 +177,11 @@ export function PlaygroundHistorySidebar(
         )}
 
         {open && (
-          <div className='bg-background/95 flex h-full w-80 flex-col overflow-hidden rounded-3xl border shadow-sm backdrop-blur'>
-            <div className='flex items-center justify-between border-b px-4 py-3'>
-              <div className='space-y-1'>
+          <div className='bg-background/95 flex h-full min-h-0 w-72 flex-col overflow-hidden rounded-2xl border shadow-sm backdrop-blur'>
+            <div className='flex shrink-0 items-center justify-between border-b px-3 py-2.5'>
+              <div className='min-w-0'>
                 <div className='text-sm font-semibold'>
                   {t('Conversation history')}
-                </div>
-                <div className='text-muted-foreground text-xs'>
-                  {t('Saved only on this device.')}
                 </div>
               </div>
               <Button

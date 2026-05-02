@@ -7,13 +7,15 @@ import type {
 } from './types'
 
 function getConversationTitle(messages: ImagePlaygroundMessage[]): string {
-  const firstUserMessage = messages.find((message) => message.from === 'user')
-  const text = firstUserMessage?.prompt?.trim()
+  const lastUserMessage = [...messages]
+    .reverse()
+    .find((message) => message.from === 'user')
+  const text = lastUserMessage?.prompt?.trim()
   if (text) {
     return text.length > 24 ? `${text.slice(0, 24)}...` : text
   }
 
-  const firstAttachment = firstUserMessage?.attachments?.[0]?.name
+  const firstAttachment = lastUserMessage?.attachments?.[0]?.name
   if (firstAttachment) {
     return firstAttachment
   }

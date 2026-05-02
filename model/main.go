@@ -284,6 +284,7 @@ func migrateDB() error {
 		&UsageSettlement{},
 		&FinanceLedger{},
 		&BreakageSettlement{},
+		&PlaygroundImageTask{},
 		&CustomOAuthProvider{},
 		&UserOAuthBinding{},
 	)
@@ -340,6 +341,7 @@ func migrateDBFast() error {
 		{&UsageSettlement{}, "UsageSettlement"},
 		{&FinanceLedger{}, "FinanceLedger"},
 		{&BreakageSettlement{}, "BreakageSettlement"},
+		{&PlaygroundImageTask{}, "PlaygroundImageTask"},
 		{&CustomOAuthProvider{}, "CustomOAuthProvider"},
 		{&UserOAuthBinding{}, "UserOAuthBinding"},
 	}

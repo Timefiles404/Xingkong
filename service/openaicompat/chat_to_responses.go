@@ -373,19 +373,23 @@ func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*d
 	}
 
 	out := &dto.OpenAIResponsesRequest{
-		Model:             req.Model,
-		Input:             inputRaw,
-		Instructions:      instructionsRaw,
-		Stream:            req.Stream,
-		Temperature:       req.Temperature,
-		Text:              textRaw,
-		ToolChoice:        toolChoiceRaw,
-		Tools:             toolsRaw,
-		TopP:              topP,
-		User:              req.User,
-		ParallelToolCalls: parallelToolCallsRaw,
-		Store:             req.Store,
-		Metadata:          req.Metadata,
+		Model:                req.Model,
+		Input:                inputRaw,
+		Instructions:         instructionsRaw,
+		Stream:               req.Stream,
+		Temperature:          req.Temperature,
+		Text:                 textRaw,
+		ToolChoice:           toolChoiceRaw,
+		Tools:                toolsRaw,
+		TopP:                 topP,
+		User:                 req.User,
+		ParallelToolCalls:    parallelToolCallsRaw,
+		Store:                req.Store,
+		Metadata:             req.Metadata,
+		PromptCacheRetention: req.PromptCacheRetention,
+	}
+	if strings.TrimSpace(req.PromptCacheKey) != "" {
+		out.PromptCacheKey, _ = common.Marshal(req.PromptCacheKey)
 	}
 	if req.MaxTokens != nil || req.MaxCompletionTokens != nil {
 		out.MaxOutputTokens = lo.ToPtr(maxOutputTokens)
@@ -395,6 +399,12 @@ func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*d
 		out.Reasoning = &dto.Reasoning{
 			Effort:  req.ReasoningEffort,
 			Summary: "detailed",
+		}
+	}
+	if len(req.ServiceTier) > 0 {
+		var serviceTier string
+		if err := common.Unmarshal(req.ServiceTier, &serviceTier); err == nil {
+			out.ServiceTier = serviceTier
 		}
 	}
 

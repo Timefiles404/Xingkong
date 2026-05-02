@@ -681,30 +681,53 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
         const quota = row.getValue('quota') as number
         const other = parseLogOther(log.other)
         const isSubscription = other?.billing_source === 'subscription'
+        const downstreamChargeCNY = other?.downstream_charge_cny
+        const upstreamCostCNY = other?.upstream_cost_cny
 
         if (isSubscription) {
           return (
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className='inline-flex items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-xs font-medium text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300'>
-                    <span className='size-1.5 rounded-full bg-emerald-500' aria-hidden='true' />
-                    {t('Subscription')}
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <span>
-                    {t('Deducted by subscription')}: {formatLogQuota(quota)}
-                  </span>
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+            <div className='flex flex-col gap-0.5'>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className='inline-flex w-fit items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-xs font-medium text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300'>
+                      <span className='size-1.5 rounded-full bg-emerald-500' aria-hidden='true' />
+                      {t('Subscription')}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <span>
+                      {t('Deducted by subscription')}: {formatLogQuota(quota)}
+                    </span>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+              {isAdmin &&
+                ((downstreamChargeCNY != null &&
+                  Number.isFinite(downstreamChargeCNY)) ||
+                  (upstreamCostCNY != null &&
+                    Number.isFinite(upstreamCostCNY))) && (
+                  <div className='flex flex-col gap-0.5 text-[11px] leading-snug'>
+                    {downstreamChargeCNY != null &&
+                      Number.isFinite(downstreamChargeCNY) && (
+                        <span className='text-muted-foreground/70'>
+                          {t('Downstream (CNY)')}:{' '}
+                          {formatCNYAmount(downstreamChargeCNY)}
+                        </span>
+                      )}
+                    {upstreamCostCNY != null &&
+                      Number.isFinite(upstreamCostCNY) && (
+                        <span className='text-muted-foreground/70'>
+                          {t('Upstream (CNY)')}: {formatCNYAmount(upstreamCostCNY)}
+                        </span>
+                      )}
+                  </div>
+                )}
+            </div>
           )
         }
 
         const quotaStr = formatLogQuota(quota)
-        const downstreamChargeCNY = other?.downstream_charge_cny
-        const upstreamCostCNY = other?.upstream_cost_cny
 
         return (
           <div className='flex flex-col gap-0.5'>

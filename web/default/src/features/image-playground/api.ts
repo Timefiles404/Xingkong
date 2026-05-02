@@ -4,6 +4,8 @@ import type {
   GroupOption,
   ImageGenerationRequest,
   ImageGenerationResponse,
+  ImageGenerationTaskCreateResponse,
+  ImageGenerationTaskStatusResponse,
   ModelOption,
 } from './types'
 
@@ -49,6 +51,27 @@ export async function generateImages(
   return res.data
 }
 
+function unwrapApiData<T>(payload: unknown): T {
+  if (
+    payload &&
+    typeof payload === 'object' &&
+    'success' in payload &&
+    'data' in payload
+  ) {
+    return (payload as { data: T }).data
+  }
+  return payload as T
+}
+
+export async function createImageGenerationTask(
+  payload: ImageGenerationRequest
+): Promise<ImageGenerationTaskCreateResponse> {
+  const res = await api.post(IMAGE_PLAYGROUND_ENDPOINTS.GENERATION_TASKS, payload, {
+    skipErrorHandler: true,
+  } as Record<string, unknown>)
+  return unwrapApiData<ImageGenerationTaskCreateResponse>(res.data)
+}
+
 export async function editImages(
   payload: FormData
 ): Promise<ImageGenerationResponse> {
@@ -59,4 +82,25 @@ export async function editImages(
     skipErrorHandler: true,
   } as Record<string, unknown>)
   return res.data
+}
+
+export async function createImageEditTask(
+  payload: FormData
+): Promise<ImageGenerationTaskCreateResponse> {
+  const res = await api.post(IMAGE_PLAYGROUND_ENDPOINTS.EDIT_TASKS, payload, {
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+    skipErrorHandler: true,
+  } as Record<string, unknown>)
+  return unwrapApiData<ImageGenerationTaskCreateResponse>(res.data)
+}
+
+export async function getImageGenerationTask(
+  taskId: string
+): Promise<ImageGenerationTaskStatusResponse> {
+  const res = await api.get(IMAGE_PLAYGROUND_ENDPOINTS.TASK_STATUS(taskId), {
+    skipErrorHandler: true,
+  } as Record<string, unknown>)
+  return unwrapApiData<ImageGenerationTaskStatusResponse>(res.data)
 }

@@ -1,4 +1,5 @@
 import { useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { sendChatCompletion } from '../api'
 import { MESSAGE_STATUS, ERROR_MESSAGES } from '../constants'
@@ -26,6 +27,7 @@ export function useChatHandler({
   parameterEnabled,
   onMessageUpdate,
 }: UseChatHandlerOptions) {
+  const { t } = useTranslation()
   const { sendStreamRequest, stopStream, isStreaming } = useStreamRequest()
 
   // Handle stream update
@@ -39,16 +41,38 @@ export function useChatHandler({
             // Direct API reasoning_content
             return {
               ...message,
+              versions:
+                message.errorCode === 'reconnecting'
+                  ? [{ ...message.versions[0], content: '' }]
+                  : message.versions,
               reasoning: {
-                content: (message.reasoning?.content || '') + chunk,
+                content:
+                  message.errorCode === 'reconnecting'
+                    ? chunk
+                    : (message.reasoning?.content || '') + chunk,
                 duration: 0,
               },
+              errorCode: null,
               isReasoningStreaming: true,
               status: MESSAGE_STATUS.STREAMING,
             }
           }
 
           // Content streaming: handle <think> tags
+          if (message.errorCode === 'reconnecting') {
+            return {
+              ...processStreamingContent(
+                {
+                  ...message,
+                  versions: [{ ...message.versions[0], content: '' }],
+                  errorCode: null,
+                },
+                chunk
+              ),
+              status: MESSAGE_STATUS.STREAMING,
+            }
+          }
+
           return {
             ...processStreamingContent(message, chunk),
             status: MESSAGE_STATUS.STREAMING,
@@ -82,6 +106,26 @@ export function useChatHandler({
     [onMessageUpdate]
   )
 
+  const handleStreamReconnect = useCallback(
+    (error: string, attempt: number, maxAttempts: number) => {
+      const content = t('{{error}}，正在重连（{{attempt}}/{{max}}）...', {
+        error,
+        attempt,
+        max: maxAttempts,
+      })
+      onMessageUpdate((prev) =>
+        updateLastAssistantMessage(prev, (message) => ({
+          ...message,
+          versions: [{ ...message.versions[0], content }],
+          status: MESSAGE_STATUS.LOADING,
+          errorCode: 'reconnecting',
+          isReasoningStreaming: false,
+        }))
+      )
+    },
+    [onMessageUpdate, t]
+  )
+
   // Send streaming chat request
   const sendStreamingChat = useCallback(
     (messages: Message[]) => {
@@ -94,7 +138,8 @@ export function useChatHandler({
         payload,
         handleStreamUpdate,
         handleStreamComplete,
-        handleStreamError
+        handleStreamError,
+        handleStreamReconnect
       )
     },
     [
@@ -104,6 +149,7 @@ export function useChatHandler({
       handleStreamUpdate,
       handleStreamComplete,
       handleStreamError,
+      handleStreamReconnect,
     ]
   )
 

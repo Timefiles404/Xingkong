@@ -239,6 +239,8 @@ export function RatioSettingsCard({
       groupDefaults.GroupSpecialUsableGroup
     ),
   })
+  const lastAppliedModelSnapshot = useRef('')
+  const lastAppliedGroupSnapshot = useRef('')
 
   const modelForm = useForm<ModelFormValues>({
     resolver: zodResolver(modelSchema),
@@ -277,7 +279,7 @@ export function RatioSettingsCard({
   })
 
   useEffect(() => {
-    modelNormalizedDefaults.current = {
+    const nextNormalizedDefaults = {
       ModelPrice: normalizeJsonString(modelDefaults.ModelPrice),
       ModelRatio: normalizeJsonString(modelDefaults.ModelRatio),
       CacheRatio: normalizeJsonString(modelDefaults.CacheRatio),
@@ -292,6 +294,13 @@ export function RatioSettingsCard({
       BillingMode: normalizeJsonString(modelDefaults.BillingMode),
       BillingExpr: normalizeJsonString(modelDefaults.BillingExpr),
     }
+    const snapshot = JSON.stringify(nextNormalizedDefaults)
+    if (snapshot === lastAppliedModelSnapshot.current) {
+      return
+    }
+
+    modelNormalizedDefaults.current = nextNormalizedDefaults
+    lastAppliedModelSnapshot.current = snapshot
 
     modelForm.reset({
       ...modelDefaults,
@@ -311,7 +320,7 @@ export function RatioSettingsCard({
   }, [modelDefaults, modelForm])
 
   useEffect(() => {
-    groupNormalizedDefaults.current = {
+    const nextNormalizedDefaults = {
       GroupRatio: normalizeJsonString(groupDefaults.GroupRatio),
       TopupGroupRatio: normalizeJsonString(groupDefaults.TopupGroupRatio),
       UserUsableGroups: normalizeJsonString(groupDefaults.UserUsableGroups),
@@ -322,6 +331,13 @@ export function RatioSettingsCard({
         groupDefaults.GroupSpecialUsableGroup
       ),
     }
+    const snapshot = JSON.stringify(nextNormalizedDefaults)
+    if (snapshot === lastAppliedGroupSnapshot.current) {
+      return
+    }
+
+    groupNormalizedDefaults.current = nextNormalizedDefaults
+    lastAppliedGroupSnapshot.current = snapshot
 
     groupForm.reset({
       ...groupDefaults,

@@ -15,7 +15,10 @@ export const DEFAULT_CONFIG: ImagePlaygroundConfig = {
 
 export const IMAGE_PLAYGROUND_ENDPOINTS = {
   GENERATIONS: '/pg/images/generations',
+  GENERATION_TASKS: '/pg/images/generations/tasks',
   EDITS: '/pg/images/edits',
+  EDIT_TASKS: '/pg/images/edits/tasks',
+  TASK_STATUS: (taskId: string) => `/pg/images/tasks/${taskId}`,
   USER_MODELS: '/api/user/models',
   USER_GROUPS: '/api/user/self/groups',
 } as const

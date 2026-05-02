@@ -781,7 +781,7 @@ func FailTaskInfo(reason string) *TaskInfo {
 // store: 数据存储授权字段，涉及用户隐私（仅 OpenAI、Responses API 支持，默认允许透传，禁用后可能导致 Codex 无法使用）
 // safety_identifier: 安全标识符，用于向 OpenAI 报告违规用户（仅 OpenAI 支持，涉及用户隐私）
 // stream_options.include_obfuscation: 响应流混淆控制字段（仅 OpenAI Responses API 支持）
-func RemoveDisabledFields(jsonData []byte, channelOtherSettings dto.ChannelOtherSettings, channelPassThroughEnabled bool) ([]byte, error) {
+func RemoveDisabledFields(jsonData []byte, channelOtherSettings dto.ChannelOtherSettings, channelPassThroughEnabled bool, channelTypes ...int) ([]byte, error) {
 	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || channelPassThroughEnabled {
 		return jsonData, nil
 	}
@@ -792,8 +792,14 @@ func RemoveDisabledFields(jsonData []byte, channelOtherSettings dto.ChannelOther
 		return jsonData, nil
 	}
 
-	// 默认移除 service_tier，除非明确允许（避免额外计费风险）
-	if !channelOtherSettings.AllowServiceTier {
+	channelType := constant.ChannelTypeUnknown
+	if len(channelTypes) > 0 {
+		channelType = channelTypes[0]
+	}
+	allowServiceTier := channelOtherSettings.AllowServiceTier || channelType == constant.ChannelTypeCodex
+
+	// 默认移除 service_tier，除非明确允许（避免额外计费风险）；Codex fast 模式需要透传。
+	if !allowServiceTier {
 		if _, exists := data["service_tier"]; exists {
 			delete(data, "service_tier")
 		}

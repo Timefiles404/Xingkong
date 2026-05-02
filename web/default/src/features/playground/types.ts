@@ -3,6 +3,8 @@ export type MessageRole = 'user' | 'assistant' | 'system'
 
 export type MessageStatus = 'loading' | 'streaming' | 'complete' | 'error'
 
+export type PlaygroundMode = 'chat' | 'agent'
+
 export interface MessageVersion {
   id: string
   content: string
@@ -18,11 +20,29 @@ export interface PlaygroundAttachment {
   textContent?: string
 }
 
+export interface AgentToolDisplayResult {
+  id?: string
+  tool: string
+  path: string
+  ok: boolean
+  status?: 'pending' | 'approved' | 'running' | 'denied' | 'complete'
+  requiresApproval?: boolean
+  summary?: string
+  output?: string
+  diff?: string
+  error?: string
+}
+
 export interface Message {
   key: string
   from: MessageRole
   versions: MessageVersion[]
+  apiContent?: string
   attachments?: PlaygroundAttachment[]
+  isAgentToolResult?: boolean
+  agentToolResults?: AgentToolDisplayResult[]
+  agentResponsesOutputItems?: ResponsesOutputHistoryItem[]
+  agentToolApprovalId?: string
   sources?: { href: string; title: string }[]
   reasoning?: {
     content: string
@@ -54,6 +74,9 @@ export interface ChatCompletionRequest {
   group?: string
   messages: ChatCompletionMessage[]
   stream: boolean
+  prompt_cache_key?: string
+  reasoning_effort?: OpenAIReasoningEffort
+  service_tier?: 'fast'
   temperature?: number
   top_p?: number
   max_tokens?: number
@@ -78,6 +101,136 @@ export interface ChatCompletionChunk {
   }>
 }
 
+export interface ResponsesInputContentPart {
+  type: 'input_text' | 'output_text' | 'input_image'
+  text?: string
+  image_url?: string
+}
+
+export interface ResponsesInputMessage {
+  type: 'message'
+  role: 'user' | 'assistant'
+  content: ResponsesInputContentPart[]
+}
+
+export interface ResponsesFunctionCallItem {
+  type: 'function_call'
+  id?: string
+  call_id: string
+  name: string
+  arguments: string
+  status?: string
+}
+
+export interface ResponsesFunctionCallOutput {
+  type: 'function_call_output'
+  call_id: string
+  output: string
+}
+
+export interface ResponsesReasoningOutputItem {
+  type: 'reasoning'
+  summary?: unknown[]
+  encrypted_content?: string
+  content?: unknown[]
+  status?: string
+}
+
+export type ResponsesOutputHistoryItem =
+  | ResponsesFunctionCallItem
+  | ResponsesReasoningOutputItem
+
+export type ResponsesInputItem =
+  | ResponsesInputMessage
+  | ResponsesOutputHistoryItem
+  | ResponsesFunctionCallOutput
+
+export interface ResponsesFunctionTool {
+  type: 'function'
+  name: string
+  description: string
+  parameters: Record<string, unknown>
+}
+
+export interface ResponsesRequest {
+  model: string
+  group?: string
+  input: ResponsesInputItem[]
+  include?: string[]
+  instructions?: string
+  previous_response_id?: string
+  stream: boolean
+  store?: boolean
+  prompt_cache_key?: string
+  tools?: ResponsesFunctionTool[]
+  tool_choice?: 'auto' | 'none'
+  parallel_tool_calls?: boolean
+  reasoning?: {
+    effort: Exclude<OpenAIReasoningEffort, 'none'>
+    summary?: 'auto' | 'concise' | 'detailed'
+  }
+  service_tier?: 'fast' | 'priority'
+  temperature?: number
+  top_p?: number
+  max_output_tokens?: number
+  frequency_penalty?: number
+  presence_penalty?: number
+  seed?: number
+}
+
+export interface ResponsesStreamEvent {
+  type: string
+  delta?: string
+  item_id?: string
+  call_id?: string
+  arguments?: string | Record<string, unknown>
+  item?: {
+    type?: string
+    id?: string
+    call_id?: string
+    name?: string
+    arguments?: string | Record<string, unknown>
+    summary?: unknown[]
+    encrypted_content?: string
+    status?: string
+    content?: Array<{
+      type?: string
+      text?: string
+    }>
+  }
+  part?: {
+    type?: string
+    text?: string
+  }
+  response?: {
+    id?: string
+    output?: Array<{
+      type?: string
+      id?: string
+      call_id?: string
+      name?: string
+      arguments?: string | Record<string, unknown>
+      summary?: unknown[]
+      encrypted_content?: string
+      status?: string
+      content?: Array<{
+        type?: string
+        text?: string
+      }>
+    }>
+    error?: {
+      message?: string
+      code?: string
+      type?: string
+    }
+  }
+  error?: {
+    message?: string
+    code?: string
+    type?: string
+  }
+}
+
 export interface ChatCompletionResponse {
   id: string
   object: string
@@ -100,9 +253,19 @@ export interface ChatCompletionResponse {
 }
 
 // Configuration types
+export type OpenAIReasoningEffort =
+  | 'none'
+  | 'minimal'
+  | 'low'
+  | 'medium'
+  | 'high'
+  | 'xhigh'
+
 export interface PlaygroundConfig {
   model: string
   group: string
+  openaiReasoningEffort: OpenAIReasoningEffort
+  openaiFastMode: boolean
   temperature: number
   top_p: number
   max_tokens: number
@@ -139,5 +302,13 @@ export interface PlaygroundConversation {
   title: string
   createdAt: number
   updatedAt: number
+  mode?: PlaygroundMode
+  workspaceName?: string
+  agentPreviousResponseId?: string
+  agentResponsesSentMessageCount?: number
+  agentResponsesPendingToolCallIds?: string[]
+  agentResponsesModel?: string
+  agentResponsesWorkspaceName?: string
+  agentResponsesStateVersion?: number
   messages: Message[]
 }

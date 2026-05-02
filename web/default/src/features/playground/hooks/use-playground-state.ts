@@ -16,30 +16,42 @@ import type {
   ModelOption,
   GroupOption,
   PlaygroundConversation,
+  PlaygroundMode,
 } from '../types'
 
 function getConversationTitle(messages: Message[]): string {
-  const firstUserMessage = messages.find((message) => message.from === 'user')
-  const text = firstUserMessage?.versions?.[0]?.content?.trim()
+  const lastUserMessage = [...messages]
+    .reverse()
+    .find((message) => {
+      if (message.from !== 'user') return false
+      if (message.isAgentToolResult) return false
+      const content = message.versions?.[0]?.content || ''
+      return !/<agent_tool_results\b/i.test(content)
+    })
+  const text = lastUserMessage?.versions?.[0]?.content?.replace(/\s+/g, ' ').trim()
   if (text) {
     return text.length > 28 ? `${text.slice(0, 28)}...` : text
   }
 
-  const firstAttachment = firstUserMessage?.attachments?.[0]?.name
-  if (firstAttachment) {
-    return firstAttachment
+  const lastAttachment = lastUserMessage?.attachments?.[0]?.name
+  if (lastAttachment) {
+    return lastAttachment
   }
 
   return 'New conversation'
 }
 
-function createConversation(messages: Message[] = []): PlaygroundConversation {
+function createConversation(
+  messages: Message[] = [],
+  mode: PlaygroundMode = 'chat'
+): PlaygroundConversation {
   const now = Date.now()
   return {
     id: nanoid(),
     title: getConversationTitle(messages),
     createdAt: now,
     updatedAt: now,
+    mode,
     messages,
   }
 }
@@ -71,6 +83,10 @@ export function usePlaygroundState() {
     return {
       conversations: [initialConversation],
       activeConversationId: initialConversation.id,
+      activeConversationIds: {
+        chat: initialConversation.id,
+        agent: null,
+      },
     }
   })
 
@@ -82,19 +98,29 @@ export function usePlaygroundState() {
     conversations.find((conversation) => conversation.id === activeConversationId) ||
     conversations[0]
   const messages = activeConversation?.messages || []
+  const mode = activeConversation?.mode || 'chat'
+  const workspaceName = activeConversation?.workspaceName || ''
 
   const persistConversationState = useCallback(
     (
       nextConversations: PlaygroundConversation[],
-      nextActiveConversationId: string | null
+      nextActiveConversationId: string | null,
+      nextActiveConversationIds?: Record<PlaygroundMode, string | null>
     ) => {
-      saveConversations(nextConversations, nextActiveConversationId)
+      const activeConversationIds =
+        nextActiveConversationIds || conversationState.activeConversationIds
+      saveConversations(
+        nextConversations,
+        nextActiveConversationId,
+        activeConversationIds
+      )
       return {
         conversations: nextConversations,
         activeConversationId: nextActiveConversationId,
+        activeConversationIds,
       }
     },
-    []
+    [conversationState.activeConversationIds]
   )
 
   // Update config with automatic save
@@ -144,7 +170,11 @@ export function usePlaygroundState() {
           }
         })
 
-        return persistConversationState(nextConversations, currentId)
+        return persistConversationState(
+          nextConversations,
+          currentId,
+          prevState.activeConversationIds
+        )
       })
     },
     [persistConversationState]
@@ -155,11 +185,14 @@ export function usePlaygroundState() {
     updateMessages([])
   }, [updateMessages])
 
-  const createNewConversation = useCallback(() => {
+  const createNewConversation = useCallback((mode: PlaygroundMode = 'chat') => {
     setConversationState((prevState) => {
-      const conversation = createConversation()
+      const conversation = createConversation([], mode)
       const nextConversations = [conversation, ...prevState.conversations]
-      return persistConversationState(nextConversations, conversation.id)
+      return persistConversationState(nextConversations, conversation.id, {
+        ...prevState.activeConversationIds,
+        [mode]: conversation.id,
+      })
     })
   }, [persistConversationState])
 
@@ -169,7 +202,14 @@ export function usePlaygroundState() {
         if (!prevState.conversations.some((item) => item.id === conversationId)) {
           return prevState
         }
-        return persistConversationState(prevState.conversations, conversationId)
+        const conversation = prevState.conversations.find(
+          (item) => item.id === conversationId
+        )
+        const nextMode = conversation?.mode || 'chat'
+        return persistConversationState(prevState.conversations, conversationId, {
+          ...prevState.activeConversationIds,
+          [nextMode]: conversationId,
+        })
       })
     },
     [persistConversationState]
@@ -183,18 +223,114 @@ export function usePlaygroundState() {
         )
         if (remaining.length === 0) {
           const replacement = createConversation()
-          return persistConversationState([replacement], replacement.id)
+          return persistConversationState([replacement], replacement.id, {
+            chat: replacement.id,
+            agent: null,
+          })
         }
 
+        const deleted = prevState.conversations.find(
+          (conversation) => conversation.id === conversationId
+        )
+        const deletedMode = deleted?.mode || 'chat'
+        const sameModeRemaining = remaining.filter(
+          (conversation) => (conversation.mode || 'chat') === deletedMode
+        )
         const nextActiveConversationId =
           prevState.activeConversationId === conversationId
-            ? remaining[0].id
+            ? sameModeRemaining[0]?.id || remaining[0].id
             : prevState.activeConversationId
+        const nextActiveConversationIds = {
+          ...prevState.activeConversationIds,
+          [deletedMode]:
+            prevState.activeConversationIds[deletedMode] === conversationId
+              ? sameModeRemaining[0]?.id || null
+              : prevState.activeConversationIds[deletedMode],
+        }
 
-        return persistConversationState(remaining, nextActiveConversationId)
+        return persistConversationState(
+          remaining,
+          nextActiveConversationId,
+          nextActiveConversationIds
+        )
       })
     },
     [persistConversationState]
+  )
+
+  const switchMode = useCallback(
+    (nextMode: PlaygroundMode) => {
+      setConversationState((prevState) => {
+        const existingId =
+          prevState.activeConversationIds[nextMode] ||
+          prevState.conversations
+            .filter((conversation) => (conversation.mode || 'chat') === nextMode)
+            .sort((a, b) => b.updatedAt - a.updatedAt)[0]?.id ||
+          null
+
+        if (existingId) {
+          return persistConversationState(prevState.conversations, existingId, {
+            ...prevState.activeConversationIds,
+            [nextMode]: existingId,
+          })
+        }
+
+        const conversation = createConversation([], nextMode)
+        return persistConversationState(
+          [conversation, ...prevState.conversations],
+          conversation.id,
+          {
+            ...prevState.activeConversationIds,
+            [nextMode]: conversation.id,
+          }
+        )
+      })
+    },
+    [persistConversationState]
+  )
+
+  const updateActiveConversationMeta = useCallback(
+    (
+      updates: Partial<
+        Pick<
+          PlaygroundConversation,
+          | 'mode'
+          | 'workspaceName'
+          | 'agentPreviousResponseId'
+          | 'agentResponsesSentMessageCount'
+          | 'agentResponsesPendingToolCallIds'
+          | 'agentResponsesModel'
+          | 'agentResponsesWorkspaceName'
+          | 'agentResponsesStateVersion'
+        >
+      >
+    ) => {
+      setConversationState((prevState) => {
+        const currentId =
+          prevState.activeConversationId || prevState.conversations[0]?.id || null
+        if (!currentId) return prevState
+
+        const now = Date.now()
+        const nextConversations = prevState.conversations.map((conversation) =>
+          conversation.id === currentId
+            ? { ...conversation, ...updates, updatedAt: now }
+            : conversation
+        )
+
+        const nextMode = updates.mode || mode
+        const nextActiveConversationIds =
+          updates.mode && currentId
+            ? { ...prevState.activeConversationIds, [nextMode]: currentId }
+            : prevState.activeConversationIds
+
+        return persistConversationState(
+          nextConversations,
+          currentId,
+          nextActiveConversationIds
+        )
+      })
+    },
+    [mode, persistConversationState]
   )
 
   // Reset config to defaults
@@ -210,10 +346,13 @@ export function usePlaygroundState() {
     config,
     parameterEnabled,
     messages,
+    mode,
+    workspaceName,
     models,
     groups,
     conversations,
     activeConversationId,
+    activeConversation,
 
     // Setters
     setModels,
@@ -227,6 +366,8 @@ export function usePlaygroundState() {
     resetConfig,
     createNewConversation,
     switchConversation,
+    switchMode,
     deleteConversation,
+    updateActiveConversationMeta,
   }
 }

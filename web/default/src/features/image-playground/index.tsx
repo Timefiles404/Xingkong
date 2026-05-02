@@ -4,8 +4,9 @@ import { nanoid } from 'nanoid'
 import { toast } from 'sonner'
 import { DEFAULT_CONFIG, DEFAULT_GROUP } from './constants'
 import {
-  editImages,
-  generateImages,
+  createImageEditTask,
+  createImageGenerationTask,
+  getImageGenerationTask,
   getUserGroups,
   getUserImageModels,
 } from './api'
@@ -24,6 +25,7 @@ import type {
   GeneratedImage,
   GroupOption,
   ImageGenerationResponse,
+  ImageGenerationTaskStatusResponse,
   ImagePlaygroundAttachment,
   ImagePlaygroundConfig,
   ImagePlaygroundConversation,
@@ -144,6 +146,54 @@ function toGeneratedImages(response: ImageGenerationResponse): GeneratedImage[] 
   }))
 }
 
+function isImageGenerationResponse(
+  value: unknown
+): value is ImageGenerationResponse {
+  return (
+    !!value &&
+    typeof value === 'object' &&
+    Array.isArray((value as ImageGenerationResponse).data)
+  )
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
+function buildImageTaskError(task: ImageGenerationTaskStatusResponse): Error {
+  const response =
+    task.response && typeof task.response === 'object'
+      ? JSON.stringify(task.response, null, 2)
+      : ''
+  const detailParts = [
+    task.error || 'Image generation failed',
+    task.status_code ? `HTTP ${task.status_code}` : '',
+    response ? `response:\n${response}` : '',
+  ].filter(Boolean)
+  return new Error(detailParts.join('\n'))
+}
+
+async function buildImageEditFormData(
+  model: string,
+  group: string,
+  prompt: string,
+  referenceImages: string[]
+): Promise<FormData> {
+  const formData = new FormData()
+  formData.append('model', model)
+  formData.append('group', group)
+  formData.append('prompt', prompt)
+  formData.append('response_format', 'b64_json')
+
+  const files = await Promise.all(
+    referenceImages.map((url, index) => imageUrlToFile(url, index))
+  )
+  files.forEach((file) => {
+    formData.append('image[]', file)
+  })
+  return formData
+}
+
 async function imageUrlToFile(url: string, index: number): Promise<File> {
   const response = await fetch(url)
   const blob = await response.blob()
@@ -231,6 +281,37 @@ export function ImagePlayground() {
         })
 
         return persistConversationState(nextConversations, currentId)
+      })
+    },
+    [persistConversationState]
+  )
+
+  const updateTaskMessage = useCallback(
+    (taskId: string, patch: Partial<ImagePlaygroundMessage>) => {
+      setConversationState((prevState) => {
+        const nextConversations = prevState.conversations.map((conversation) => {
+          let changed = false
+          const newMessages = conversation.messages.map((message) => {
+            if (message.taskId !== taskId) return message
+            changed = true
+            return {
+              ...message,
+              ...patch,
+            }
+          })
+          if (!changed) return conversation
+          return {
+            ...conversation,
+            messages: newMessages,
+            title: getConversationTitle(newMessages),
+            updatedAt: Date.now(),
+          }
+        })
+
+        return persistConversationState(
+          nextConversations,
+          prevState.activeConversationId
+        )
       })
     },
     [persistConversationState]
@@ -344,6 +425,33 @@ export function ImagePlayground() {
     [config.group, config.model]
   )
 
+  const waitForImageTask = useCallback(
+    async (taskId: string) => {
+      const maxAttempts = 120
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        const task = await getImageGenerationTask(taskId)
+        if (task.status === 'succeeded') {
+          if (!isImageGenerationResponse(task.response)) {
+            throw new Error('No image was returned.')
+          }
+          const images = toGeneratedImages(task.response).filter((item) => item.url)
+          updateTaskMessage(taskId, {
+            status: 'complete',
+            images,
+            errorMessage: undefined,
+          })
+          return
+        }
+        if (task.status === 'failed') {
+          throw buildImageTaskError(task)
+        }
+        await sleep(3000)
+      }
+      throw new Error('图片生成仍在进行，请稍后打开历史记录查看。')
+    },
+    [updateTaskMessage]
+  )
+
   const handleSubmit = useCallback(
     async (prompt: string, attachments: ImagePlaygroundAttachment[]) => {
       if (!canSubmit || isGenerating) return
@@ -353,6 +461,7 @@ export function ImagePlayground() {
       const nextMessages = [...messages, userMessage, loadingMessage]
       updateMessages(nextMessages)
       setIsGenerating(true)
+      let submittedTaskId: string | null = null
 
       try {
         const latestAssistantImages = findLastAssistantImages(messages)
@@ -361,49 +470,42 @@ export function ImagePlayground() {
           ...attachments.map((item) => item.url),
         ]
 
-        let response: ImageGenerationResponse
-        if (referenceImages.length > 0) {
-          const formData = new FormData()
-          formData.append('model', config.model)
-          formData.append('group', config.group)
-          formData.append('prompt', prompt)
-          formData.append('response_format', 'b64_json')
+        const task =
+          referenceImages.length > 0
+            ? await createImageEditTask(
+                await buildImageEditFormData(
+                  config.model,
+                  config.group,
+                  prompt,
+                  referenceImages
+                )
+              )
+            : await createImageGenerationTask({
+                model: config.model,
+                group: config.group,
+                prompt,
+                response_format: 'b64_json',
+              })
+        submittedTaskId = task.id
 
-          const files = await Promise.all(
-            referenceImages.map((url, index) => imageUrlToFile(url, index))
-          )
-          files.forEach((file) => {
-            formData.append('image[]', file)
-          })
-
-          response = await editImages(formData)
-        } else {
-          response = await generateImages({
-            model: config.model,
-            group: config.group,
-            prompt,
-            response_format: 'b64_json',
-          })
-        }
-
-        const images = toGeneratedImages(response).filter((item) => item.url)
         updateMessages((prev) =>
-          prev.map((message, index) =>
-            index === prev.length - 1
+          prev.map((message) =>
+            message.key === loadingMessage.key
               ? {
                   ...message,
-                  status: 'complete',
-                  images,
+                  taskId: task.id,
                 }
               : message
           )
         )
+        await waitForImageTask(task.id)
       } catch (error: unknown) {
         const { summary, details } = formatImageGenerationError(error)
         toast.error(summary)
         updateMessages((prev) =>
-          prev.map((message, index) =>
-            index === prev.length - 1
+          prev.map((message) =>
+            message.key === loadingMessage.key ||
+            (submittedTaskId && message.taskId === submittedTaskId)
               ? {
                   ...message,
                   status: 'error',
@@ -416,8 +518,48 @@ export function ImagePlayground() {
         setIsGenerating(false)
       }
     },
-    [canSubmit, config.group, config.model, isGenerating, messages, updateMessages]
+    [
+      canSubmit,
+      config.group,
+      config.model,
+      isGenerating,
+      messages,
+      updateMessages,
+      waitForImageTask,
+    ]
   )
+
+  useEffect(() => {
+    const pendingTaskIds = conversations.flatMap((conversation) =>
+      conversation.messages
+        .filter((message) => message.status === 'loading' && message.taskId)
+        .map((message) => message.taskId as string)
+    )
+    if (pendingTaskIds.length === 0 || isGenerating) return
+
+    let cancelled = false
+    setIsGenerating(true)
+    Promise.allSettled(
+      pendingTaskIds.map(async (taskId) => {
+        try {
+          await waitForImageTask(taskId)
+        } catch (error) {
+          if (cancelled) return
+          const { details } = formatImageGenerationError(error)
+          updateTaskMessage(taskId, {
+            status: 'error',
+            errorMessage: details,
+          })
+        }
+      })
+    ).finally(() => {
+      if (!cancelled) setIsGenerating(false)
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [conversations, isGenerating, updateTaskMessage, waitForImageTask])
 
   return (
     <div className='relative flex size-full flex-col overflow-hidden'>

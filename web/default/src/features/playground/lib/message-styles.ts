@@ -21,7 +21,8 @@ export function getMessageContentStyles() {
     // Preferred readable widths and wrapping
     'leading-relaxed',
     'break-words',
-    'whitespace-pre-wrap',
+    'group-[.is-user]:whitespace-pre-wrap',
+    'group-[.is-assistant]:whitespace-normal',
     'sm:leading-7',
     // Cap user bubble width so it does not look like a banner
     'group-[.is-user]:max-w-[85%]',

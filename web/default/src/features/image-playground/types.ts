@@ -19,6 +19,7 @@ export type ImagePlaygroundMessage = {
   attachments?: ImagePlaygroundAttachment[]
   images?: GeneratedImage[]
   status?: 'loading' | 'complete' | 'error'
+  taskId?: string
   errorMessage?: string
   createdAt: number
 }
@@ -62,4 +63,20 @@ export type ImageGenerationResponse = {
     b64_json?: string
     revised_prompt?: string
   }>
+}
+
+export type ImageGenerationTaskCreateResponse = {
+  id: string
+  status: 'queued' | 'running' | 'succeeded' | 'failed'
+}
+
+export type ImageGenerationTaskStatusResponse = {
+  id: string
+  status: 'queued' | 'running' | 'succeeded' | 'failed'
+  status_code?: number
+  response?: ImageGenerationResponse | unknown
+  error?: string
+  created_at?: number
+  updated_at?: number
+  completed_at?: number
 }

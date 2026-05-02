@@ -4,6 +4,7 @@ import type {
   ParameterEnabled,
   Message,
   PlaygroundConversation,
+  PlaygroundMode,
 } from '../types'
 import { sanitizeMessagesOnLoad } from './message-utils'
 
@@ -120,24 +121,52 @@ export function saveMessages(messages: Message[]): void {
 export function loadConversations(): {
   conversations: PlaygroundConversation[]
   activeConversationId: string | null
+  activeConversationIds: Record<PlaygroundMode, string | null>
 } {
   try {
     const savedConversations = localStorage.getItem(STORAGE_KEYS.CONVERSATIONS)
     const savedActiveId = localStorage.getItem(STORAGE_KEYS.ACTIVE_CONVERSATION_ID)
+    const savedChatActiveId = localStorage.getItem(
+      STORAGE_KEYS.ACTIVE_CHAT_CONVERSATION_ID
+    )
+    const savedAgentActiveId = localStorage.getItem(
+      STORAGE_KEYS.ACTIVE_AGENT_CONVERSATION_ID
+    )
 
     if (savedConversations) {
       const parsed = JSON.parse(savedConversations) as PlaygroundConversation[]
       const conversations = parsed.map((conversation) => ({
         ...conversation,
+        mode: conversation.mode || 'chat',
         messages: sanitizeMessagesOnLoad(conversation.messages || []),
       }))
+      const chatActiveId =
+        savedChatActiveId &&
+        conversations.some(
+          (item) => item.id === savedChatActiveId && (item.mode || 'chat') === 'chat'
+        )
+          ? savedChatActiveId
+          : conversations.find((item) => (item.mode || 'chat') === 'chat')?.id ||
+            null
+      const agentActiveId =
+        savedAgentActiveId &&
+        conversations.some(
+          (item) => item.id === savedAgentActiveId && item.mode === 'agent'
+        )
+          ? savedAgentActiveId
+          : conversations.find((item) => item.mode === 'agent')?.id || null
+      const activeConversationId =
+        savedActiveId && conversations.some((item) => item.id === savedActiveId)
+          ? savedActiveId
+          : chatActiveId || agentActiveId || conversations[0]?.id || null
 
       return {
         conversations,
-        activeConversationId:
-          savedActiveId && conversations.some((item) => item.id === savedActiveId)
-            ? savedActiveId
-            : conversations[0]?.id || null,
+        activeConversationId,
+        activeConversationIds: {
+          chat: chatActiveId,
+          agent: agentActiveId,
+        },
       }
     }
 
@@ -152,10 +181,17 @@ export function loadConversations(): {
         messages: legacyMessages,
       }
 
-      saveConversations([migratedConversation], migratedConversation.id)
+      saveConversations([migratedConversation], migratedConversation.id, {
+        chat: migratedConversation.id,
+        agent: null,
+      })
       return {
         conversations: [migratedConversation],
         activeConversationId: migratedConversation.id,
+        activeConversationIds: {
+          chat: migratedConversation.id,
+          agent: null,
+        },
       }
     }
   } catch (error) {
@@ -166,12 +202,17 @@ export function loadConversations(): {
   return {
     conversations: [],
     activeConversationId: null,
+    activeConversationIds: {
+      chat: null,
+      agent: null,
+    },
   }
 }
 
 export function saveConversations(
   conversations: PlaygroundConversation[],
-  activeConversationId: string | null
+  activeConversationId: string | null,
+  activeConversationIds?: Record<PlaygroundMode, string | null>
 ): void {
   try {
     localStorage.setItem(
@@ -185,6 +226,24 @@ export function saveConversations(
       )
     } else {
       localStorage.removeItem(STORAGE_KEYS.ACTIVE_CONVERSATION_ID)
+    }
+
+    if (activeConversationIds?.chat) {
+      localStorage.setItem(
+        STORAGE_KEYS.ACTIVE_CHAT_CONVERSATION_ID,
+        activeConversationIds.chat
+      )
+    } else {
+      localStorage.removeItem(STORAGE_KEYS.ACTIVE_CHAT_CONVERSATION_ID)
+    }
+
+    if (activeConversationIds?.agent) {
+      localStorage.setItem(
+        STORAGE_KEYS.ACTIVE_AGENT_CONVERSATION_ID,
+        activeConversationIds.agent
+      )
+    } else {
+      localStorage.removeItem(STORAGE_KEYS.ACTIVE_AGENT_CONVERSATION_ID)
     }
   } catch (error) {
     // eslint-disable-next-line no-console
@@ -202,6 +261,8 @@ export function clearPlaygroundData(): void {
     localStorage.removeItem(STORAGE_KEYS.MESSAGES)
     localStorage.removeItem(STORAGE_KEYS.CONVERSATIONS)
     localStorage.removeItem(STORAGE_KEYS.ACTIVE_CONVERSATION_ID)
+    localStorage.removeItem(STORAGE_KEYS.ACTIVE_CHAT_CONVERSATION_ID)
+    localStorage.removeItem(STORAGE_KEYS.ACTIVE_AGENT_CONVERSATION_ID)
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error('Failed to clear playground data:', error)

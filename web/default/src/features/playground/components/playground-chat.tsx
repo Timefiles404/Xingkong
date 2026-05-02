@@ -1,5 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
-import { FileTextIcon, ImageIcon } from 'lucide-react'
+import {
+  CheckCircle2Icon,
+  ChevronUpIcon,
+  FileTextIcon,
+  ImageIcon,
+  WrenchIcon,
+  XCircleIcon,
+} from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -44,11 +52,189 @@ interface PlaygroundChatProps {
   onRegenerateMessage?: (message: MessageType) => void
   onEditMessage?: (message: MessageType) => void
   onDeleteMessage?: (message: MessageType) => void
+  onApproveAgentToolCalls?: (approvalId: string, approved: boolean) => void
   isGenerating?: boolean
   editingKey?: string | null
   onSaveEdit?: (newContent: string) => void
   onCancelEdit?: (open: boolean) => void
   onSaveEditAndSubmit?: (newContent: string) => void
+}
+
+function formatToolName(tool: string): string {
+  const names: Record<string, string> = {
+    list_dir: '列出目录',
+    read_file: '读取文件',
+    search_files: '搜索文件',
+    write_file: '写入文件',
+    append_file: '追加文件',
+    batch_edit: '批量编辑',
+    create_dir: '创建目录',
+  }
+  return names[tool] || tool
+}
+
+function DiffPreview({ diff }: { diff?: string }) {
+  if (!diff) return null
+
+  const lines = diff.split(/\r?\n/)
+
+  return (
+    <div className='mt-1 max-h-72 overflow-auto rounded-md border bg-background/80 font-mono text-[11px] leading-4'>
+      {lines.map((line, index) => {
+        const type = line.startsWith('+')
+          ? 'add'
+          : line.startsWith('-')
+            ? 'remove'
+            : 'context'
+
+        return (
+          <div
+            className={cn(
+              'min-w-max px-2 py-0.5 whitespace-pre',
+              type === 'add' && 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
+              type === 'remove' && 'bg-red-500/10 text-red-700 dark:text-red-300',
+              type === 'context' && 'text-muted-foreground'
+            )}
+            key={`${index}-${line}`}
+          >
+            {line || ' '}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function AgentToolResultCard({
+  message,
+  onApproveAgentToolCalls,
+}: {
+  message: MessageType
+  onApproveAgentToolCalls?: (approvalId: string, approved: boolean) => void
+}) {
+  const { t } = useTranslation()
+  const results = message.agentToolResults || []
+
+  if (results.length === 0) return null
+
+  const failedCount = results.filter((result) => !result.ok).length
+  const pendingApproval = !!message.agentToolApprovalId
+  const summary = results
+    .map((result) => `${formatToolName(result.tool)} ${result.path || '.'}`)
+    .join('，')
+
+  if (pendingApproval) {
+    return (
+      <div className='sticky bottom-4 z-30 my-2 max-w-3xl rounded-xl border border-amber-500/25 bg-background/95 px-3 py-2 text-xs shadow-lg backdrop-blur'>
+        <div className='flex flex-wrap items-center gap-2'>
+          <WrenchIcon className='size-3.5 shrink-0 text-amber-600' />
+          <span className='font-medium text-foreground'>{t('Review changes')}</span>
+          <span className='text-muted-foreground min-w-0 flex-1 truncate'>
+            {summary}
+          </span>
+          <Button
+            className='h-7 rounded-full px-3 text-xs'
+            onClick={() =>
+              onApproveAgentToolCalls?.(message.agentToolApprovalId!, true)
+            }
+            size='sm'
+            type='button'
+          >
+            {t('Apply')}
+          </Button>
+          <Button
+            className='h-7 rounded-full px-3 text-xs'
+            onClick={() =>
+              onApproveAgentToolCalls?.(message.agentToolApprovalId!, false)
+            }
+            size='sm'
+            type='button'
+            variant='outline'
+          >
+            {t('Reject')}
+          </Button>
+        </div>
+        <details className='group mt-1'>
+          <summary className='text-muted-foreground hover:text-foreground flex cursor-pointer list-none items-center gap-1 py-1'>
+            <ChevronUpIcon className='size-3.5 transition-transform group-open:rotate-180' />
+            <span>{t('Click to review diff')}</span>
+          </summary>
+          <div className='mt-1 max-h-[42vh] overflow-y-auto pr-1'>
+            {results.map((result, index) => (
+              <div className='py-1' key={`${message.key}-review-${index}`}>
+                <div className='flex items-center gap-2'>
+                  <span className='text-[11px] font-semibold text-foreground/80'>
+                    {result.path || '.'}
+                  </span>
+                  <span className='text-muted-foreground text-[11px]'>
+                    {formatToolName(result.tool)}
+                    {result.summary ? ` · ${result.summary}` : ''}
+                  </span>
+                </div>
+                <DiffPreview diff={result.diff || result.output} />
+              </div>
+            ))}
+          </div>
+        </details>
+      </div>
+    )
+  }
+
+  return (
+    <details className='group my-2 max-w-3xl'>
+      <summary className='text-muted-foreground hover:text-foreground flex cursor-pointer list-none items-center gap-2 rounded-lg px-1 py-1 text-xs transition-colors'>
+        <WrenchIcon className='size-3.5 shrink-0' />
+        <span>{t('Local file tools')}</span>
+        <span className='text-muted-foreground/80 min-w-0 flex-1 truncate'>
+          {results.length} 个操作
+          {failedCount > 0 ? `，${failedCount} 个失败` : ''} · {summary}
+        </span>
+        <span className='text-[11px] group-open:hidden'>{t('Expand')}</span>
+        <span className='hidden text-[11px] group-open:inline'>{t('Collapse')}</span>
+      </summary>
+      <div className='mt-1 space-y-1.5 border-l pl-3'>
+        {results.map((result, index) => {
+          const StatusIcon = result.ok ? CheckCircle2Icon : XCircleIcon
+          const preview = result.error || result.summary || result.output || ''
+          const outputLines = (result.output || '')
+            .split(/\r?\n/)
+            .filter(Boolean)
+            .slice(0, 8)
+
+          return (
+            <div
+              className='text-muted-foreground text-xs'
+              key={`${message.key}-tool-${index}`}
+            >
+              <div className='flex min-w-0 items-start gap-2 py-1'>
+                <StatusIcon
+                  className={cn(
+                    'mt-0.5 size-3.5 shrink-0',
+                    result.ok ? 'text-emerald-500' : 'text-destructive'
+                  )}
+                />
+                <div className='min-w-0 flex-1'>
+                  <div className='flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1'>
+                    <span className='font-medium text-foreground/80'>
+                      {formatToolName(result.tool)}
+                    </span>
+                    <span className='break-all'>{result.path || '.'}</span>
+                  </div>
+                  {preview && <p className='mt-0.5 break-words'>{preview}</p>}
+                </div>
+              </div>
+              {result.diff && <DiffPreview diff={result.diff} />}
+              {result.ok && outputLines.length > 0 && (
+                <pre className='bg-muted/30 ml-5 max-h-40 overflow-auto rounded-md px-2 py-1.5 text-[11px] leading-5 whitespace-pre-wrap'>
+                  {outputLines.join('\n')}
+                </pre>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </details>
+  )
 }
 
 export function PlaygroundChat({
@@ -57,6 +243,7 @@ export function PlaygroundChat({
   onRegenerateMessage,
   onEditMessage,
   onDeleteMessage,
+  onApproveAgentToolCalls,
   isGenerating = false,
   editingKey,
   onSaveEdit,
@@ -157,7 +344,11 @@ export function PlaygroundChat({
                   {versions.map((version, versionIndex) => (
                     <Message
                       className='group flex-row-reverse'
-                      from={message.from}
+                      from={
+                        message.isAgentToolResult
+                          ? MESSAGE_ROLES.ASSISTANT
+                          : message.from
+                      }
                       key={`${message.key}-${version.id}-${versionIndex}`}
                     >
                       <div className='w-full min-w-0 flex-1 basis-full py-1'>
@@ -215,11 +406,15 @@ export function PlaygroundChat({
                               const hasUserAttachments =
                                 message.from === MESSAGE_ROLES.USER &&
                                 !!message.attachments?.length
+                              const showAgentToolResults =
+                                message.isAgentToolResult &&
+                                !!message.agentToolResults?.length
                               const showMessageContent =
-                                ((message.from === MESSAGE_ROLES.USER &&
+                                !showAgentToolResults &&
+                                (((message.from === MESSAGE_ROLES.USER &&
                                   (!!version.content || hasUserAttachments)) ||
                                   !message.isReasoningStreaming) &&
-                                (!!version.content || hasUserAttachments)
+                                  (!!version.content || hasUserAttachments))
 
                               // Extract visible content (remove <think> tags for assistant messages)
                               const displayContent = isAssistant
@@ -294,11 +489,20 @@ export function PlaygroundChat({
                                       {actions}
                                     </>
                                   ) : (
-                                    showMessageContent && (
+                                    (showAgentToolResults ||
+                                      showMessageContent) && (
                                       <>
                                         {message.from === MESSAGE_ROLES.USER &&
                                           renderUserAttachments(message)}
-                                        {displayContent && (
+                                        {showAgentToolResults && (
+                                          <AgentToolResultCard
+                                            message={message}
+                                            onApproveAgentToolCalls={
+                                              onApproveAgentToolCalls
+                                            }
+                                          />
+                                        )}
+                                        {showMessageContent && displayContent && (
                                           <MessageContent
                                             variant='flat'
                                             className={cn(
@@ -308,7 +512,7 @@ export function PlaygroundChat({
                                             <Response>{displayContent}</Response>
                                           </MessageContent>
                                         )}
-                                        {actions}
+                                        {!showAgentToolResults && actions}
                                       </>
                                     )
                                   )}
