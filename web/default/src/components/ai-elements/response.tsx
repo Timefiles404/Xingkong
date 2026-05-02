@@ -5,8 +5,10 @@ import ReactMarkdown from 'react-markdown'
 import rehypeRaw from 'rehype-raw'
 import remarkGfm from 'remark-gfm'
 import { CheckIcon, CopyIcon, FileIcon } from 'lucide-react'
+import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
+import { revealHelperWorkspacePath } from '@/features/playground/lib'
 
 type ResponseProps = {
   className?: string
@@ -42,6 +44,17 @@ function parseFileHref(href?: string): string | null {
 function fileNameFromPath(path: string): string {
   const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '')
   return normalized.split('/').filter(Boolean).pop() || normalized || '.'
+}
+
+async function handleFileReferenceClick(filePath: string) {
+  try {
+    await revealHelperWorkspacePath(filePath)
+    return
+  } catch {
+    if (!navigator?.clipboard?.writeText) return
+    await navigator.clipboard.writeText(filePath)
+    toast.success('Path copied')
+  }
 }
 
 function CodeBlock({
@@ -109,7 +122,7 @@ export const Response = memo(
           '[&>*:first-child]:mt-0 [&>*:last-child]:mb-0',
           '[&_p]:my-px [&_p:empty]:my-0 [&_p:empty]:h-0',
           '[&_br]:leading-none',
-          '[&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0',
+          '[&_ul]:my-1 [&_ol]:my-1 [&_ul]:list-disc [&_ol]:list-decimal [&_ul]:pl-5 [&_ol]:pl-5 [&_li]:my-0 [&_li]:pl-1',
           '[&_a]:text-primary [&_a]:underline-offset-4 hover:[&_a]:underline',
           '[&_blockquote]:my-1.5 [&_blockquote]:border-l-2 [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground',
           '[&_table]:my-1.5 [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:px-2 [&_th]:py-1',
@@ -128,7 +141,7 @@ export const Response = memo(
                   <button
                     className='mx-0.5 inline-flex max-w-full items-center gap-1 rounded-[5px] border bg-muted px-1.5 py-0.5 align-baseline text-xs font-medium text-foreground shadow-xs hover:bg-accent'
                     onClick={() => {
-                      void navigator?.clipboard?.writeText(filePath)
+                      void handleFileReferenceClick(filePath)
                     }}
                     title={filePath}
                     type='button'

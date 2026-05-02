@@ -229,10 +229,23 @@ function createFileToken(path: string, kind?: string): HTMLSpanElement {
   return token
 }
 
-function insertNodeAtSelection(node: Node) {
+function insertNodeAtSelection(root: HTMLDivElement | null, node: Node) {
+  if (!root) return
   const selection = window.getSelection()
-  if (!selection || selection.rangeCount === 0) return
-  const range = selection.getRangeAt(0)
+  let range: Range
+  if (
+    selection &&
+    selection.rangeCount > 0 &&
+    root.contains(selection.getRangeAt(0).commonAncestorContainer)
+  ) {
+    range = selection.getRangeAt(0)
+  } else {
+    range = document.createRange()
+    range.selectNodeContents(root)
+    range.collapse(false)
+  }
+
+  root.focus()
   range.deleteContents()
   range.insertNode(document.createTextNode(' '))
   range.insertNode(node)
@@ -301,7 +314,10 @@ function AgentPromptEditor({
           const entry = getDroppedFileEntry(event)
           if (!entry) return
           event.preventDefault()
-          insertNodeAtSelection(createFileToken(entry.path, entry.kind))
+          insertNodeAtSelection(
+            editorRef.current,
+            createFileToken(entry.path, entry.kind)
+          )
           syncValue()
         }}
         onInput={syncValue}

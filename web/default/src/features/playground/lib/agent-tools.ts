@@ -870,6 +870,14 @@ export async function listHelperWorkspaceEntries(
   return response.entries || []
 }
 
+export async function revealHelperWorkspacePath(path: string): Promise<void> {
+  const response = await helperFSRequest({
+    op: 'reveal_path',
+    path: path || '.',
+  })
+  if (!response.ok) throw new Error(response.error || 'helper_reveal_failed')
+}
+
 async function readFile(
   root: FileSystemDirectoryHandle,
   path: string,
