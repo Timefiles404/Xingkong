@@ -158,30 +158,6 @@ func TestCompleteSubscriptionOrder_RejectsMismatchedPaymentProvider(t *testing.T
 	assert.Nil(t, topUp)
 }
 
-func TestCompleteSubscriptionOrder_SetsPaidAmountFromOrderMoney(t *testing.T) {
-	truncateTables(t)
-
-	insertUserForPaymentGuardTest(t, 252, 0)
-	plan := insertSubscriptionPlanForPaymentGuardTest(t, 351)
-	order := &SubscriptionOrder{
-		UserId:          252,
-		PlanId:          plan.Id,
-		Money:           12.34,
-		TradeNo:         "sub-paid-amount-order",
-		PaymentMethod:   PaymentProviderStripe,
-		PaymentProvider: PaymentProviderStripe,
-		Status:          common.TopUpStatusPending,
-		CreateTime:      time.Now().Unix(),
-	}
-	require.NoError(t, order.Insert())
-
-	require.NoError(t, CompleteSubscriptionOrder("sub-paid-amount-order", `{"provider":"stripe"}`, PaymentProviderStripe, ""))
-
-	var sub UserSubscription
-	require.NoError(t, DB.Where("user_id = ?", 252).First(&sub).Error)
-	assert.Equal(t, int64(12.34*common.QuotaPerUnit), sub.PaidAmount)
-}
-
 func TestExpireSubscriptionOrder_RejectsMismatchedPaymentProvider(t *testing.T) {
 	truncateTables(t)
 

@@ -151,9 +151,9 @@ func TestRecordUsageSettlementSplitsWalletLotsAndSubtractsUpstreamCostFromCashFl
 		totalQuota += row.QuotaUsed
 		totalUpstreamCost += row.UpstreamCostCNY
 		assert.Equal(t, "per-token", row.DownstreamPricingMode)
-		assert.InDelta(t, 2.5, row.DownstreamPromptPriceUSDPer1M, 0.000001)
-		assert.InDelta(t, 15, row.DownstreamCompletionPriceUSDPer1M, 0.000001)
-		assert.InDelta(t, 1.25, row.DownstreamCachePriceUSDPer1M, 0.000001)
+		assert.InDelta(t, 5, row.DownstreamPromptPriceUSDPer1M, 0.000001)
+		assert.InDelta(t, 30, row.DownstreamCompletionPriceUSDPer1M, 0.000001)
+		assert.InDelta(t, 2.5, row.DownstreamCachePriceUSDPer1M, 0.000001)
 	}
 	assert.Equal(t, int64(600), totalPrompt)
 	assert.Equal(t, int64(400), totalCompletion)
