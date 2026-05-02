@@ -1,7 +1,7 @@
 'use client'
 
 import { type ReactNode, memo, useState } from 'react'
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import rehypeRaw from 'rehype-raw'
 import remarkGfm from 'remark-gfm'
 import { CheckIcon, CopyIcon, FileIcon } from 'lucide-react'
@@ -39,6 +39,11 @@ function parseFileHref(href?: string): string | null {
   } catch {
     return href.slice('file://'.length)
   }
+}
+
+function markdownUrlTransform(url: string): string {
+  if (url.startsWith('file://')) return url
+  return defaultUrlTransform(url)
 }
 
 function fileNameFromPath(path: string): string {
@@ -133,6 +138,7 @@ export const Response = memo(
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
           rehypePlugins={[rehypeRaw]}
+          urlTransform={markdownUrlTransform}
           components={{
             a: ({ node: _node, children: linkChildren, ...linkProps }) => {
               const filePath = parseFileHref(linkProps.href)
