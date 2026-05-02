@@ -1236,6 +1236,7 @@ export function Playground() {
   const [helperHistoryReady, setHelperHistoryReady] = useState(false)
   const [helperHistorySupported, setHelperHistorySupported] = useState(true)
   const lastSavedHelperHistoryRef = useRef('')
+  const helperStatusMissesRef = useRef(0)
   const [isAgentRunning, setIsAgentRunning] = useState(false)
   const pendingAgentApprovalsRef = useRef<
     Map<string, (approved: boolean) => void>
@@ -1379,7 +1380,16 @@ export function Playground() {
     let cancelled = false
     const refresh = async () => {
       const status = await checkAgentHelperStatus()
-      if (!cancelled) setAgentHelperStatus(status)
+      if (cancelled) return
+      if (status) {
+        helperStatusMissesRef.current = 0
+        setAgentHelperStatus(status)
+        return
+      }
+      helperStatusMissesRef.current += 1
+      setAgentHelperStatus((previous) =>
+        previous && helperStatusMissesRef.current < 3 ? previous : null
+      )
     }
 
     void refresh()

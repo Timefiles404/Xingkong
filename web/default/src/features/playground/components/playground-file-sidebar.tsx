@@ -33,17 +33,17 @@ interface FileTreeNodeProps {
   entry: WorkspaceEntry
   depth: number
   root?: FileSystemDirectoryHandle
-  helperStatus?: AgentHelperStatus | null
+  helperEnabled?: boolean
   disabled?: boolean
   refreshKey?: number
 }
 
 async function listEntries(
   root: FileSystemDirectoryHandle | undefined,
-  helperStatus: AgentHelperStatus | null | undefined,
+  helperEnabled: boolean,
   path: string
 ): Promise<WorkspaceEntry[]> {
-  if (isAgentHelperPaired(helperStatus)) {
+  if (helperEnabled) {
     return listHelperWorkspaceEntries(path)
   }
   if (!root) return []
@@ -54,7 +54,7 @@ function FileTreeNode({
   entry,
   depth,
   root,
-  helperStatus,
+  helperEnabled = false,
   disabled = false,
   refreshKey = 0,
 }: FileTreeNodeProps) {
@@ -68,20 +68,20 @@ function FileTreeNode({
     if (!isDirectory || children) return
     setLoading(true)
     try {
-      setChildren(await listEntries(root, helperStatus, entry.path))
+      setChildren(await listEntries(root, helperEnabled, entry.path))
     } catch {
       toast.error(t('Failed to read folder'))
       setChildren([])
     } finally {
       setLoading(false)
     }
-  }, [children, entry.path, helperStatus, isDirectory, root, t])
+  }, [children, entry.path, helperEnabled, isDirectory, root, t])
 
   useEffect(() => {
     if (!open || !isDirectory) return
     let cancelled = false
     setLoading(true)
-    listEntries(root, helperStatus, entry.path)
+    listEntries(root, helperEnabled, entry.path)
       .then((nextChildren) => {
         if (!cancelled) setChildren(nextChildren)
       })
@@ -98,7 +98,7 @@ function FileTreeNode({
     return () => {
       cancelled = true
     }
-  }, [entry.path, helperStatus, isDirectory, open, refreshKey, root, t])
+  }, [entry.path, helperEnabled, isDirectory, open, refreshKey, root, t])
 
   const toggle = async () => {
     if (!isDirectory) return
@@ -189,7 +189,7 @@ function FileTreeNode({
               key={child.path}
               refreshKey={refreshKey}
               root={root}
-              helperStatus={helperStatus}
+              helperEnabled={helperEnabled}
             />
           ))}
         </div>
@@ -209,16 +209,18 @@ export function PlaygroundFileSidebar({
   const [open, setOpen] = useState(true)
   const [loading, setLoading] = useState(false)
   const [entries, setEntries] = useState<WorkspaceEntry[]>([])
+  const helperEnabled = isAgentHelperPaired(helperStatus)
+  const helperWorkspace = helperStatus?.workspace || ''
 
   useEffect(() => {
-    if (!root && !isAgentHelperPaired(helperStatus)) {
+    if (!root && !helperEnabled) {
       setEntries([])
       return
     }
 
     let cancelled = false
     setLoading(true)
-    listEntries(root, helperStatus, '.')
+    listEntries(root, helperEnabled, '.')
       .then((nextEntries) => {
         if (!cancelled) setEntries(nextEntries)
       })
@@ -235,14 +237,14 @@ export function PlaygroundFileSidebar({
     return () => {
       cancelled = true
     }
-  }, [helperStatus, refreshKey, root, t])
+  }, [helperEnabled, helperWorkspace, refreshKey, root, t])
 
   const title = useMemo(
     () => workspaceName || root?.name || helperStatus?.workspace || t('Workspace files'),
     [helperStatus?.workspace, root?.name, t, workspaceName]
   )
 
-  if (!root && !isAgentHelperPaired(helperStatus)) return null
+  if (!root && !helperEnabled) return null
 
   return (
     <div className='pointer-events-none absolute inset-y-0 left-0 z-20 hidden pl-4 lg:flex'>
@@ -296,7 +298,7 @@ export function PlaygroundFileSidebar({
                       key={entry.path}
                       refreshKey={refreshKey}
                       root={root}
-                      helperStatus={helperStatus}
+                      helperEnabled={helperEnabled}
                     />
                   ))
                 )}
