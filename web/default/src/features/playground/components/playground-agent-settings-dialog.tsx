@@ -102,7 +102,7 @@ export function PlaygroundAgentSettingsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className='flex h-[90vh] max-w-6xl flex-col overflow-hidden p-0'>
+      <DialogContent className='top-auto right-3 bottom-3 left-auto flex h-[min(78vh,720px)] w-[calc(100vw-1.5rem)] max-w-none translate-x-0 translate-y-0 flex-col overflow-hidden p-0 sm:max-w-none md:right-6 md:bottom-6 md:h-[min(78vh,840px)] md:w-[min(88vw,1120px)]'>
         <DialogHeader className='border-b px-6 py-4'>
           <DialogTitle>{t('Agent 设置')}</DialogTitle>
         </DialogHeader>

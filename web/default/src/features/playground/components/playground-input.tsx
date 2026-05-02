@@ -647,11 +647,12 @@ function ContextUsageRing({
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <PromptInputButton
-          className='!rounded-full border font-medium'
+          className='!rounded-full border'
           variant='outline'
           type='button'
+          aria-label={t('上下文用量')}
         >
-          <svg className='size-5 -rotate-90' viewBox='0 0 18 18'>
+          <svg className='size-4 -rotate-90' viewBox='0 0 18 18'>
             <circle
               className='stroke-muted'
               cx='9'
@@ -672,10 +673,9 @@ function ContextUsageRing({
               strokeWidth='2'
             />
           </svg>
-          <span className='hidden sm:inline'>{percent}%</span>
         </PromptInputButton>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align='end' className='w-72 p-3'>
+      <DropdownMenuContent align='start' className='w-72 p-3'>
         <div className='space-y-3'>
           <div>
             <div className='text-sm font-medium'>{t('上下文用量')}</div>
@@ -806,6 +806,7 @@ export function PlaygroundInput({
         <PromptInputFooter className='p-2.5'>
           <PromptInputTools>
             <AttachmentMenu disabled={disabled} />
+            {agentMode && <ContextUsageRing usage={contextUsage} />}
           </PromptInputTools>
 
           <div className='flex items-center gap-1.5 md:gap-2'>
@@ -823,8 +824,6 @@ export function PlaygroundInput({
               }
               groupLabel={groupLabel}
             />
-
-            {agentMode && <ContextUsageRing usage={contextUsage} />}
 
             {agentMode && (
               <PromptInputButton
