@@ -24,15 +24,21 @@ function estimateTokensFromText(text: string): number {
 function getMessageText(message: Message): string {
   if (message.isAgentContextEvent) return ''
   const formatted = isValidMessage(message) ? formatMessageForAPI(message) : null
-  if (!formatted) return ''
-  if (typeof formatted.content === 'string') return formatted.content
-  return formatted.content
-    .map((part) => {
-      if (part.type === 'text') return part.text || ''
-      if (part.type === 'image_url') return '[image]'
-      return ''
-    })
-    .join('\n')
+  const content = !formatted
+    ? ''
+    : typeof formatted.content === 'string'
+      ? formatted.content
+      : formatted.content
+          .map((part) => {
+            if (part.type === 'text') return part.text || ''
+            if (part.type === 'image_url') return '[image]'
+            return ''
+          })
+          .join('\n')
+  const nativeItems = message.agentResponsesOutputItems?.length
+    ? JSON.stringify(message.agentResponsesOutputItems)
+    : ''
+  return [content, nativeItems].filter(Boolean).join('\n')
 }
 
 export function estimateMessageTokens(message: Message): number {
@@ -143,6 +149,18 @@ function isCompactionSummaryMessage(message: Message): boolean {
   return message.key === AGENT_CONTEXT_SUMMARY_KEY
 }
 
+function stripNativeHistoryAfterCompaction(message: Message): Message {
+  if (message.isAgentContextEvent) return message
+  return {
+    ...message,
+    apiContent:
+      message.from === 'assistant' || message.isAgentToolResult
+        ? undefined
+        : message.apiContent,
+    agentResponsesOutputItems: undefined,
+  }
+}
+
 export function buildModelVisibleAgentMessages(
   conversation: PlaygroundConversation | undefined,
   workingMessages: Message[],
@@ -161,6 +179,9 @@ export function buildModelVisibleAgentMessages(
     : -1
   const tail = startIndex >= 0 ? modelMessages.slice(startIndex) : modelMessages
   return [buildCompactionSummaryMessage(conversation.agentContextSummary), ...tail]
+    .map((message, index) =>
+      index === 0 ? message : stripNativeHistoryAfterCompaction(message)
+    )
 }
 
 export function calculateAgentContextUsage(
@@ -290,7 +311,9 @@ export function prepareAgentContextCompaction(
   const compactedMessages = visibleMessages
     .slice(0, tailStart)
     .filter((message) => !isCompactionSummaryMessage(message))
-  const tailMessages = visibleMessages.slice(tailStart)
+  const tailMessages = visibleMessages
+    .slice(tailStart)
+    .map(stripNativeHistoryAfterCompaction)
   const localSummary = buildAgentContextSummary(
     conversation?.agentContextSummary,
     compactedMessages,

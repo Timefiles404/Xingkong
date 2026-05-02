@@ -260,7 +260,12 @@ function getMessageCompactionText(message: MessageType): string {
             return ''
           })
           .join('\n')
-  return `${formatted.role}:\n${content}`
+  const nativeItems = message.agentResponsesOutputItems?.length
+    ? `\n\nnative_responses_output_items:\n${JSON.stringify(
+        message.agentResponsesOutputItems
+      )}`
+    : ''
+  return `${formatted.role}:\n${content}${nativeItems}`
 }
 
 function buildAgentSummaryPrompt(
@@ -2621,25 +2626,6 @@ export function Playground() {
           )
           workingMessages = toolExecution.messages
           updateMessages(workingMessages)
-
-          const compaction = await compactAgentMessages({
-            currentConversation: contextConversation,
-            currentMessages: workingMessages,
-            currentAgentSettings,
-            runtimeWorkspaceName,
-          })
-          workingMessages = compaction.messages
-          if (compaction.changed) {
-            contextConversation = contextConversation
-              ? {
-                  ...contextConversation,
-                  agentContextSummary: compaction.summary,
-                  agentContextSummaryUpdatedAt: Date.now(),
-                  agentContextCompactedBeforeKey: compaction.compactedBeforeKey,
-                  agentContextUsage: compaction.usage,
-                }
-              : contextConversation
-          }
           const nextAssistantMessage = createLoadingAssistantMessage()
           workingMessages = [...workingMessages, nextAssistantMessage]
           updateMessages(workingMessages)
