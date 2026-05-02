@@ -12,6 +12,7 @@ import {
 
 const EXTERNAL_AGENT_FEE_USD = 0.05
 const QUOTA_PER_USD = 10000
+const AGENT_CONTEXT_SUMMARY_KEY = 'agent-context-summary'
 
 function estimateTokensFromText(text: string): number {
   if (!text) return 0
@@ -42,7 +43,10 @@ export function estimateMessageTokens(message: Message): number {
 
 function countUserTurns(messages: Message[]): number {
   return messages.filter(
-    (message) => message.from === 'user' && !message.isAgentToolResult
+    (message) =>
+      message.from === 'user' &&
+      !message.isAgentToolResult &&
+      !isCompactionSummaryMessage(message)
   ).length
 }
 
@@ -51,7 +55,11 @@ function getRecentTailStartIndex(messages: Message[], tailTurns: number): number
   let seen = 0
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]
-    if (message.from === 'user' && !message.isAgentToolResult) {
+    if (
+      message.from === 'user' &&
+      !message.isAgentToolResult &&
+      !isCompactionSummaryMessage(message)
+    ) {
       seen += 1
       if (seen >= tailTurns) return index
     }
@@ -79,7 +87,12 @@ export function buildAgentContextSummary(
   workspaceName: string
 ): string {
   const userGoals = compactedMessages
-    .filter((message) => message.from === 'user' && !message.isAgentToolResult)
+    .filter(
+      (message) =>
+        message.from === 'user' &&
+        !message.isAgentToolResult &&
+        !isCompactionSummaryMessage(message)
+    )
     .slice(-6)
     .map((message) => `- ${getMessageText(message).slice(0, 500)}`)
   const assistantProgress = compactedMessages
@@ -120,10 +133,14 @@ export function buildAgentContextSummary(
 
 export function buildCompactionSummaryMessage(summary: string): Message {
   return {
-    key: 'agent-context-summary',
+    key: AGENT_CONTEXT_SUMMARY_KEY,
     from: 'user',
     versions: [createMessageVersion(summary)],
   }
+}
+
+function isCompactionSummaryMessage(message: Message): boolean {
+  return message.key === AGENT_CONTEXT_SUMMARY_KEY
 }
 
 export function buildModelVisibleAgentMessages(
@@ -158,7 +175,9 @@ export function calculateAgentContextUsage(
 
   for (const message of messages) {
     const tokens = estimateMessageTokens(message)
-    if (message.isAgentToolResult) {
+    if (isCompactionSummaryMessage(message)) {
+      compactedTokens += tokens
+    } else if (message.isAgentToolResult) {
       toolTokens += tokens
     } else if (message.from === 'user') {
       userTokens += tokens
@@ -210,34 +229,20 @@ export function compactAgentConversationIfNeeded(
   compactedBeforeKey?: string
   usage: AgentContextUsage
 } {
-  const baseUsage = calculateAgentContextUsage(
+  const plan = prepareAgentContextCompaction(
+    conversation,
     workingMessages,
     settings,
-    conversation?.agentContextSummary
-      ? estimateTokensFromText(conversation.agentContextSummary)
-      : 0
+    workspaceName,
+    force
   )
-  if (!force && !shouldCompactAgentContext(workingMessages, settings)) {
-    return { changed: false, usage: baseUsage }
-  }
+  if (!plan.changed) return { changed: false, usage: plan.usage }
 
-  const tailStart = getRecentTailStartIndex(workingMessages, settings.tailTurns)
-  if (tailStart <= 0) return { changed: false, usage: baseUsage }
-
-  const compactedMessages = workingMessages.slice(0, tailStart)
-  const tailMessages = workingMessages.slice(tailStart)
-  const summary = buildAgentContextSummary(
-    conversation?.agentContextSummary,
-    compactedMessages,
-    workspaceName
-  )
-  const summaryTokens = estimateTokensFromText(summary)
-  const usage = calculateAgentContextUsage(tailMessages, settings, summaryTokens)
   return {
     changed: true,
-    summary,
-    compactedBeforeKey: tailMessages[0]?.key,
-    usage,
+    summary: plan.localSummary,
+    compactedBeforeKey: plan.compactedBeforeKey,
+    usage: plan.usage,
   }
 }
 
@@ -256,37 +261,35 @@ export function prepareAgentContextCompaction(
   localSummary?: string
   usage: AgentContextUsage
 } {
-  const modelMessages = workingMessages.filter(
-    (message) => !message.isAgentContextEvent
+  const visibleMessages = buildModelVisibleAgentMessages(
+    conversation,
+    workingMessages,
+    settings
   )
-  const baseUsage = calculateAgentContextUsage(
-    modelMessages,
-    settings,
-    conversation?.agentContextSummary
-      ? estimateTokensFromText(conversation.agentContextSummary)
-      : 0
-  )
-  if (!force && !shouldCompactAgentContext(modelMessages, settings)) {
+  const baseUsage = calculateAgentContextUsage(visibleMessages, settings)
+  if (!force && !shouldCompactAgentContext(visibleMessages, settings)) {
     return {
       changed: false,
       compactedMessages: [],
-      tailMessages: modelMessages,
+      tailMessages: visibleMessages,
       usage: baseUsage,
     }
   }
 
-  const tailStart = getRecentTailStartIndex(modelMessages, settings.tailTurns)
+  const tailStart = getRecentTailStartIndex(visibleMessages, settings.tailTurns)
   if (tailStart <= 0) {
     return {
       changed: false,
       compactedMessages: [],
-      tailMessages: modelMessages,
+      tailMessages: visibleMessages,
       usage: baseUsage,
     }
   }
 
-  const compactedMessages = modelMessages.slice(0, tailStart)
-  const tailMessages = modelMessages.slice(tailStart)
+  const compactedMessages = visibleMessages
+    .slice(0, tailStart)
+    .filter((message) => !isCompactionSummaryMessage(message))
+  const tailMessages = visibleMessages.slice(tailStart)
   const localSummary = buildAgentContextSummary(
     conversation?.agentContextSummary,
     compactedMessages,

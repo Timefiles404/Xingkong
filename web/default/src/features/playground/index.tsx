@@ -228,6 +228,9 @@ function createAgentContextEventMessage(
 
 function getMessageCompactionText(message: MessageType): string {
   if (message.isAgentContextEvent) return ''
+  if (message.key === 'agent-context-summary') {
+    return `previous_summary:\n${message.versions?.[0]?.content || ''}`
+  }
   if (message.isAgentToolResult) {
     const results = message.agentToolResults || []
     return [
@@ -1644,16 +1647,14 @@ export function Playground() {
   const activeAgentModelValue = agentUsesExternalProvider
     ? activeExternalProvider.selectedModel || activeExternalProvider.models[0]?.value || ''
     : config.model
-  const contextUsage =
-    activeConversation?.agentContextUsage ||
-    calculateAgentContextUsage(
-      buildModelVisibleAgentMessages(
-        activeConversation,
-        messages,
-        agentSettings.context
-      ),
+  const contextUsage = calculateAgentContextUsage(
+    buildModelVisibleAgentMessages(
+      activeConversation,
+      messages,
       agentSettings.context
-    )
+    ),
+    agentSettings.context
+  )
 
   useEffect(() => {
     if (!isAgentMode || !helperHistoryKey) {
@@ -2595,11 +2596,7 @@ export function Playground() {
             toolCalls,
             workingMessages
           )
-          const nextAssistantMessage = createLoadingAssistantMessage()
-          workingMessages = [
-            ...toolExecution.messages,
-            nextAssistantMessage,
-          ]
+          workingMessages = toolExecution.messages
           updateMessages(workingMessages)
 
           const compaction = await compactAgentMessages({
@@ -2620,6 +2617,9 @@ export function Playground() {
                 }
               : contextConversation
           }
+          const nextAssistantMessage = createLoadingAssistantMessage()
+          workingMessages = [...workingMessages, nextAssistantMessage]
+          updateMessages(workingMessages)
         }
 
         workingMessages = workingMessages.map((message, index) => {
