@@ -4289,6 +4289,16 @@
     "No {{label}} found.": "未找到 {{label}}。",
     "Choose {{label}}": "选择 {{label}}",
     "groups": "分组",
-    "group": "分组"
+    "group": "分组",
+    "Auto update failed": "自动更新失败",
+    "Auto update started": "自动更新已启动",
+    "Update source": "更新源",
+    "Target image": "目标镜像",
+    "Auto update unavailable": "自动更新不可用",
+    "Auto update": "自动更新",
+    "Confirm auto update": "确认自动更新",
+    "The server will pull the target image and recreate the app container. The page may disconnect briefly during restart.": "服务器会拉取目标镜像并重建应用容器。重启期间页面可能会短暂断开。",
+    "Confirm update": "确认更新",
+    "Updating...": "正在更新..."
   }
 }

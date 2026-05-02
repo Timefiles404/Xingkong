@@ -27,6 +27,8 @@ RUN mkdir -p ./web/classic/dist && \
     printf '%s\n' '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Classic UI Disabled</title></head><body>Classic UI has been disabled. Please use the default frontend.</body></html>' > ./web/classic/dist/index.html
 RUN go build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$(cat VERSION)'" -o new-api
 
+FROM docker:27-cli AS dockercli
+
 FROM debian:bookworm-slim@sha256:f06537653ac770703bc45b4b113475bd402f451e85223f0f2837acbf89ab020a
 
 RUN apt-get update \
@@ -35,6 +37,8 @@ RUN apt-get update \
     && update-ca-certificates
 
 COPY --from=builder2 /build/new-api /
+COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=dockercli /usr/local/libexec/docker/cli-plugins/docker-compose /usr/local/libexec/docker/cli-plugins/docker-compose
 EXPOSE 3000
 WORKDIR /data
 ENTRYPOINT ["/new-api"]

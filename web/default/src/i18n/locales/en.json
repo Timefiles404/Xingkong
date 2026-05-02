@@ -4289,6 +4289,16 @@
     "No {{label}} found.": "No {{label}} found.",
     "Choose {{label}}": "Choose {{label}}",
     "groups": "groups",
-    "group": "group"
+    "group": "group",
+    "Auto update failed": "Auto update failed",
+    "Auto update started": "Auto update started",
+    "Update source": "Update source",
+    "Target image": "Target image",
+    "Auto update unavailable": "Auto update unavailable",
+    "Auto update": "Auto update",
+    "Confirm auto update": "Confirm auto update",
+    "The server will pull the target image and recreate the app container. The page may disconnect briefly during restart.": "The server will pull the target image and recreate the app container. The page may disconnect briefly during restart.",
+    "Confirm update": "Confirm update",
+    "Updating...": "Updating..."
   }
 }

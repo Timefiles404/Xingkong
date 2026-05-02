@@ -47,6 +47,62 @@ else:
 path.write_text('\n'.join(lines) + '\n')
 PY
 
+echo "[2.5/6] enabling in-panel auto update support"
+python3 - "$COMPOSE_FILE" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+lines = path.read_text().splitlines()
+
+def find_service_bounds(lines, service):
+    start = None
+    for i, line in enumerate(lines):
+        if line.startswith("  ") and not line.startswith("    ") and line.strip() == f"{service}:":
+            start = i
+            break
+    if start is None:
+        raise SystemExit(f"{service} service not found")
+    end = len(lines)
+    for i in range(start + 1, len(lines)):
+        if lines[i].startswith("  ") and not lines[i].startswith("    ") and lines[i].strip().endswith(":"):
+            end = i
+            break
+    return start, end
+
+def ensure_list_item(lines, service, section, item):
+    start, end = find_service_bounds(lines, service)
+    section_idx = None
+    for i in range(start + 1, end):
+        if lines[i].strip() == f"{section}:" and lines[i].startswith("    "):
+            section_idx = i
+            break
+    if section_idx is None:
+        insert_at = end
+        lines.insert(insert_at, f"    {section}:")
+        lines.insert(insert_at + 1, f"      - {item}")
+        return
+    item_line = f"      - {item}"
+    for i in range(section_idx + 1, end):
+        if lines[i].startswith("    ") and not lines[i].startswith("      "):
+            break
+        if lines[i].strip() == f"- {item}":
+            return
+    insert_at = section_idx + 1
+    while insert_at < len(lines) and lines[insert_at].startswith("      - "):
+        insert_at += 1
+    lines.insert(insert_at, item_line)
+
+ensure_list_item(lines, "app", "volumes", "/var/run/docker.sock:/var/run/docker.sock")
+ensure_list_item(lines, "app", "volumes", "/opt/1panel/docker/compose/newapi/docker-compose.yml:/host-compose/docker-compose.yml")
+ensure_list_item(lines, "app", "environment", "XINGKONG_AUTO_UPDATE_COMPOSE_FILE=/host-compose/docker-compose.yml")
+ensure_list_item(lines, "app", "environment", "XINGKONG_AUTO_UPDATE_COMPOSE_HOST_FILE=/opt/1panel/docker/compose/newapi/docker-compose.yml")
+ensure_list_item(lines, "app", "environment", "XINGKONG_AUTO_UPDATE_SERVICE=app")
+ensure_list_item(lines, "app", "environment", "XINGKONG_AUTO_UPDATE_IMAGE_REPO=ghcr.io/timefiles404/xingkong")
+
+path.write_text("\n".join(lines) + "\n")
+PY
+
 echo "[3/6] forcing runtime options"
 docker exec "$DB_CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" -c "INSERT INTO options(key,value) VALUES ('theme.frontend','default') ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value;" >/dev/null
 docker exec "$DB_CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" -c "INSERT INTO options(key,value) VALUES ('QuotaPerUnit','10000') ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value;" >/dev/null

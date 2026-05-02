@@ -210,6 +210,12 @@ func SetApiRouter(router *gin.Engine) {
 			performanceRoute.GET("/logs", controller.GetLogFiles)
 			performanceRoute.DELETE("/logs", controller.CleanupLogFiles)
 		}
+		systemRoute := apiRouter.Group("/system")
+		systemRoute.Use(middleware.RootAuth())
+		{
+			systemRoute.GET("/update/check", controller.CheckSystemUpdate)
+			systemRoute.POST("/update/apply", controller.ApplySystemUpdate)
+		}
 		ratioSyncRoute := apiRouter.Group("/ratio_sync")
 		ratioSyncRoute.Use(middleware.RootAuth())
 		{

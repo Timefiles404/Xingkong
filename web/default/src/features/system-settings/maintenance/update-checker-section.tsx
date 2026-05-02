@@ -1,8 +1,19 @@
 import { useState } from 'react'
-import { ExternalLinkIcon, RefreshCcwIcon } from 'lucide-react'
+import { ExternalLinkIcon, RefreshCcwIcon, RocketIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { formatTimestamp, formatTimestampToDate } from '@/lib/format'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -13,6 +24,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Markdown } from '@/components/ui/markdown'
+import { applySystemUpdate, checkSystemUpdate } from '../api'
 import { SettingsSection } from '../components/settings-section'
 
 type ReleaseInfo = {
@@ -34,8 +46,17 @@ export function UpdateCheckerSection({
 }: UpdateCheckerSectionProps) {
   const { t } = useTranslation()
   const [checking, setChecking] = useState(false)
+  const [updating, setUpdating] = useState(false)
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [confirmOpen, setConfirmOpen] = useState(false)
   const [release, setRelease] = useState<ReleaseInfo | null>(null)
+  const [updateInfo, setUpdateInfo] = useState<{
+    repository: string
+    image: string
+    has_update: boolean
+    can_auto_update: boolean
+    auto_update_hint?: string
+  } | null>(null)
 
   const uptime = startTime ? formatTimestamp(startTime) : t('Unknown')
   const version = currentVersion || t('Unknown')
@@ -43,26 +64,23 @@ export function UpdateCheckerSection({
   const handleCheckUpdates = async () => {
     setChecking(true)
     try {
-      const response = await fetch(
-        'https://api.github.com/repos/Calcium-Ion/new-api/releases/latest',
-        {
-          headers: {
-            Accept: 'application/vnd.github+json',
-            'User-Agent': 'new-api-dashboard',
-          },
-        }
-      )
-
-      if (!response.ok) {
-        throw new Error(t('Failed to contact GitHub releases API'))
+      const response = await checkSystemUpdate()
+      if (!response.success || !response.data) {
+        throw new Error(response.message || t('Failed to check for updates'))
       }
-
-      const data = (await response.json()) as ReleaseInfo
+      const data = response.data.release_info as ReleaseInfo | undefined
       if (!data?.tag_name) {
         throw new Error(t('Unexpected release payload'))
       }
+      setUpdateInfo({
+        repository: response.data.repository,
+        image: response.data.image,
+        has_update: response.data.has_update,
+        can_auto_update: response.data.can_auto_update,
+        auto_update_hint: response.data.auto_update_hint,
+      })
 
-      if (currentVersion && data.tag_name === currentVersion) {
+      if (!response.data.has_update) {
         toast.success(
           t('You are running the latest version ({{version}}).', {
             version: data.tag_name,
@@ -81,6 +99,25 @@ export function UpdateCheckerSection({
       toast.error(message)
     } finally {
       setChecking(false)
+    }
+  }
+
+  const handleApplyUpdate = async () => {
+    setUpdating(true)
+    try {
+      const response = await applySystemUpdate()
+      if (!response.success) {
+        throw new Error(response.message || t('Auto update failed'))
+      }
+      toast.success(response.message || t('Auto update started'))
+      setConfirmOpen(false)
+      setDialogOpen(false)
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : t('Auto update failed')
+      toast.error(message)
+    } finally {
+      setUpdating(false)
     }
   }
 
@@ -147,6 +184,25 @@ export function UpdateCheckerSection({
           </DialogHeader>
 
           <div className='space-y-4'>
+            {updateInfo && (
+              <Alert>
+                <AlertDescription className='space-y-1 text-sm'>
+                  <div>
+                    {t('Update source')}: {updateInfo.repository}
+                  </div>
+                  <div>
+                    {t('Target image')}: {updateInfo.image}
+                  </div>
+                  {!updateInfo.can_auto_update &&
+                    updateInfo.auto_update_hint && (
+                      <div className='text-destructive'>
+                        {t('Auto update unavailable')}:{' '}
+                        {updateInfo.auto_update_hint}
+                      </div>
+                    )}
+                </AlertDescription>
+              </Alert>
+            )}
             {release?.body ? (
               <Markdown>{release.body}</Markdown>
             ) : (
@@ -170,9 +226,40 @@ export function UpdateCheckerSection({
                 {t('Open release')}
               </Button>
             )}
+            {updateInfo?.has_update && (
+              <Button
+                type='button'
+                onClick={() => setConfirmOpen(true)}
+                disabled={!updateInfo.can_auto_update || updating}
+              >
+                <RocketIcon className='me-2 h-4 w-4' />
+                {updating ? t('Updating...') : t('Auto update')}
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('Confirm auto update')}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t(
+                'The server will pull the target image and recreate the app container. The page may disconnect briefly during restart.'
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={updating}>
+              {t('Cancel')}
+            </AlertDialogCancel>
+            <AlertDialogAction onClick={handleApplyUpdate} disabled={updating}>
+              {updating ? t('Updating...') : t('Confirm update')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   )
 }

@@ -47,3 +47,44 @@ export async function fetchUpstreamRatios(request: FetchUpstreamRatiosRequest) {
   )
   return res.data
 }
+
+export type SystemUpdateInfo = {
+  current_version: string
+  latest_version: string
+  has_update: boolean
+  repository: string
+  image: string
+  can_auto_update: boolean
+  auto_update_hint?: string
+  release_info?: {
+    tag_name: string
+    name?: string
+    body?: string
+    html_url?: string
+    published_at?: string
+  }
+}
+
+export type SystemUpdateInfoResponse = {
+  success: boolean
+  message: string
+  data?: SystemUpdateInfo
+}
+
+export type ApplySystemUpdateResponse = {
+  success: boolean
+  message: string
+  data?: {
+    target_image?: string
+  }
+}
+
+export async function checkSystemUpdate() {
+  const res = await api.get<SystemUpdateInfoResponse>('/api/system/update/check')
+  return res.data
+}
+
+export async function applySystemUpdate() {
+  const res = await api.post<ApplySystemUpdateResponse>('/api/system/update/apply')
+  return res.data
+}
