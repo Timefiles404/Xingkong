@@ -40,6 +40,7 @@ export interface Message {
   apiContent?: string
   attachments?: PlaygroundAttachment[]
   isAgentToolResult?: boolean
+  isAgentContextEvent?: boolean
   agentToolResults?: AgentToolDisplayResult[]
   agentResponsesOutputItems?: ResponsesOutputHistoryItem[]
   agentToolApprovalId?: string
@@ -285,6 +286,10 @@ export interface AgentContextSettings {
   fontSize: number
   fontFamily: string
   systemPrompt: string
+  summaryProviderKind: AgentProviderKind
+  summaryBuiltinModel?: string
+  summaryExternalProviderId?: string
+  summaryExternalModel?: string
 }
 
 export interface AgentSettings {

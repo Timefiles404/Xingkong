@@ -409,7 +409,11 @@ export function PlaygroundChat({
                               const showAgentToolResults =
                                 message.isAgentToolResult &&
                                 !!message.agentToolResults?.length
+                              const showAgentContextEvent =
+                                message.isAgentContextEvent &&
+                                !!version.content
                               const showMessageContent =
+                                !showAgentContextEvent &&
                                 !showAgentToolResults &&
                                 (((message.from === MESSAGE_ROLES.USER &&
                                   (!!version.content || hasUserAttachments)) ||
@@ -470,12 +474,25 @@ export function PlaygroundChat({
                                   )}
 
                                   {/* Loader */}
-                                  {showLoader && (
+                                  {showLoader && !showAgentContextEvent && (
                                     <div className='flex items-center gap-2 py-2'>
                                       <Loader />
                                       <Shimmer className='text-sm' duration={1}>
                                         Responding...
                                       </Shimmer>
+                                    </div>
+                                  )}
+
+                                  {showAgentContextEvent && (
+                                    <div className='my-4 flex items-center gap-3 text-xs text-muted-foreground'>
+                                      <div className='h-px flex-1 bg-border' />
+                                      <div className='flex items-center gap-2 rounded-full border bg-background px-3 py-1 shadow-xs'>
+                                        {message.status === 'loading' && (
+                                          <Loader />
+                                        )}
+                                        <span>{version.content}</span>
+                                      </div>
+                                      <div className='h-px flex-1 bg-border' />
                                     </div>
                                   )}
 

@@ -340,6 +340,7 @@ export function parseAgentToolCalls(content: string): AgentToolCall[] {
 export function stripAgentToolBlocks(content: string): string {
   return content
     .replace(/<agent_tools>[\s\S]*?<\/agent_tools>/gi, '')
+    .replace(/<agent_tools\b[\s\S]*$/gi, '')
     .replace(/```agent_tools\s*[\s\S]*?```/gi, '')
     .trim()
 }
@@ -347,6 +348,7 @@ export function stripAgentToolBlocks(content: string): string {
 export function getCompleteAgentToolBlockEnd(content: string): number | null {
   const matches = [
     /<agent_tools\b[\s\S]*?<\/agent_tools>/i.exec(content),
+    /<agent_tools\b[\s\S]*?<\/agent_tools\s*$/i.exec(content),
     /```agent_tools\s*[\s\S]*?```/i.exec(content),
   ].filter((match): match is RegExpExecArray => !!match)
 
@@ -559,11 +561,11 @@ async function executeAgentToolCall(
 }
 
 function parseXmlAgentToolCalls(content: string): AgentToolCall[] {
-  const match = content.match(/<agent_tools>([\s\S]*?)<\/agent_tools>/i)
-  if (!match?.[1]) return []
+  const body = extractAgentToolsXmlBody(content)
+  if (!body) return []
 
   const calls: AgentToolCall[] = []
-  const toolBlocks = match[1].matchAll(
+  const toolBlocks = body.matchAll(
     /<tool\b([^>]*)>([\s\S]*?)<\/tool>|<tool\b([^>]*)\/>/gi
   )
 
@@ -598,6 +600,27 @@ function parseXmlAgentToolCalls(content: string): AgentToolCall[] {
   }
 
   return calls.slice(0, MAX_TOOL_CALLS)
+}
+
+function extractAgentToolsXmlBody(content: string): string {
+  const full = content.match(/<agent_tools\b[^>]*>([\s\S]*?)<\/agent_tools>/i)
+  if (full?.[1]) return full[1]
+
+  const start = content.match(/<agent_tools\b[^>]*>/i)
+  if (!start || start.index === undefined) return ''
+
+  const afterStart = content.slice(start.index + start[0].length)
+  const incompleteCloseIndex = afterStart.search(/<\/agent_tools\s*$/i)
+  if (incompleteCloseIndex >= 0) {
+    return afterStart.slice(0, incompleteCloseIndex)
+  }
+
+  const lastToolClose = afterStart.lastIndexOf('</tool>')
+  if (lastToolClose >= 0) {
+    return afterStart.slice(0, lastToolClose + '</tool>'.length)
+  }
+
+  return ''
 }
 
 async function runLocalCommand(call: AgentToolCall): Promise<AgentToolResult> {

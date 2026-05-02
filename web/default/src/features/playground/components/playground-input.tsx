@@ -71,6 +71,9 @@ interface PlaygroundInputProps {
   groupLabel?: string
   contextUsage?: AgentContextUsage
   agentMode?: boolean
+  onCompactContextNow?: () => void
+  canCompactContext?: boolean
+  isCompactingContext?: boolean
 }
 
 const TEXT_FILE_ACCEPT =
@@ -625,8 +628,14 @@ function OpenAIRequestControls({
 
 function ContextUsageRing({
   usage,
+  onCompactNow,
+  canCompact = false,
+  isCompacting = false,
 }: {
   usage?: AgentContextUsage
+  onCompactNow?: () => void
+  canCompact?: boolean
+  isCompacting?: boolean
 }) {
   const { t } = useTranslation()
   const used = usage?.totalTokens || 0
@@ -712,6 +721,17 @@ function ContextUsageRing({
               </span>
             </div>
           </div>
+          <DropdownMenuItem
+            className='mt-2 justify-center rounded-lg border text-xs'
+            disabled={!canCompact || isCompacting}
+            onClick={(event) => {
+              event.preventDefault()
+              onCompactNow?.()
+            }}
+          >
+            {isCompacting && <Loader2Icon className='mr-2 size-3.5 animate-spin' />}
+            {t('立刻压缩上下文')}
+          </DropdownMenuItem>
         </div>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -737,6 +757,9 @@ export function PlaygroundInput({
   groupLabel,
   contextUsage,
   agentMode = false,
+  onCompactContextNow,
+  canCompactContext = false,
+  isCompactingContext = false,
 }: PlaygroundInputProps) {
   const { t } = useTranslation()
   const [text, setText] = useState('')
@@ -803,7 +826,14 @@ export function PlaygroundInput({
         <PromptInputFooter className='p-2.5'>
           <PromptInputTools>
             <AttachmentMenu disabled={disabled} />
-            {agentMode && <ContextUsageRing usage={contextUsage} />}
+            {agentMode && (
+              <ContextUsageRing
+                canCompact={canCompactContext}
+                isCompacting={isCompactingContext}
+                onCompactNow={onCompactContextNow}
+                usage={contextUsage}
+              />
+            )}
           </PromptInputTools>
 
           <div className='flex items-center gap-1.5 md:gap-2'>

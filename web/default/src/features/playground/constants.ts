@@ -62,6 +62,10 @@ export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
     fontSize: 16,
     fontFamily: '',
     systemPrompt: '',
+    summaryProviderKind: 'builtin',
+    summaryBuiltinModel: '',
+    summaryExternalProviderId: undefined,
+    summaryExternalModel: '',
   },
 }
 

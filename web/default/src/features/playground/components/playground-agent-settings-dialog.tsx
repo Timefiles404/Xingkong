@@ -27,6 +27,7 @@ import type {
   AgentExternalEndpointType,
   AgentExternalProvider,
   AgentSettings,
+  ModelOption,
 } from '../types'
 
 interface PlaygroundAgentSettingsDialogProps {
@@ -34,6 +35,7 @@ interface PlaygroundAgentSettingsDialogProps {
   onOpenChange: (open: boolean) => void
   settings: AgentSettings
   onSettingsChange: (updater: AgentSettings | ((prev: AgentSettings) => AgentSettings)) => void
+  builtinModels: ModelOption[]
 }
 
 const tabs = [
@@ -58,6 +60,7 @@ export function PlaygroundAgentSettingsDialog({
   onOpenChange,
   settings,
   onSettingsChange,
+  builtinModels,
 }: PlaygroundAgentSettingsDialogProps) {
   const { t } = useTranslation()
   const [activeTab, setActiveTab] = useState<(typeof tabs)[number]['key']>('provider')
@@ -409,6 +412,145 @@ export function PlaygroundAgentSettingsDialog({
                         }))
                       }
                     />
+                  </div>
+                </div>
+                <div className='rounded-xl border p-4'>
+                  <div className='mb-3'>
+                    <Label>{t('摘要模型')}</Label>
+                    <p className='text-muted-foreground text-sm'>
+                      {t('触发压缩时调用该模型生成真实摘要；失败时会使用本地兜底摘要。')}
+                    </p>
+                  </div>
+                  <div className='grid gap-3 md:grid-cols-3'>
+                    <div className='space-y-1.5'>
+                      <Label>{t('摘要渠道')}</Label>
+                      <Select
+                        value={settings.context.summaryProviderKind}
+                        onValueChange={(value) =>
+                          onSettingsChange((prev) => ({
+                            ...prev,
+                            context: {
+                              ...prev.context,
+                              summaryProviderKind:
+                                value as AgentSettings['providerKind'],
+                            },
+                          }))
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value='builtin'>{t('内置渠道')}</SelectItem>
+                          <SelectItem value='external'>{t('外置渠道')}</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {settings.context.summaryProviderKind === 'external' ? (
+                      <>
+                        <div className='space-y-1.5'>
+                          <Label>{t('外置渠道')}</Label>
+                          <Select
+                            value={
+                              settings.context.summaryExternalProviderId ||
+                              settings.activeExternalProviderId ||
+                              settings.externalProviders[0]?.id ||
+                              ''
+                            }
+                            onValueChange={(value) =>
+                              onSettingsChange((prev) => ({
+                                ...prev,
+                                context: {
+                                  ...prev.context,
+                                  summaryExternalProviderId: value,
+                                  summaryExternalModel: '',
+                                },
+                              }))
+                            }
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder={t('选择渠道')} />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {settings.externalProviders.map((provider) => (
+                                <SelectItem key={provider.id} value={provider.id}>
+                                  {provider.name || t('外置渠道')}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className='space-y-1.5'>
+                          <Label>{t('摘要模型')}</Label>
+                          <Select
+                            value={settings.context.summaryExternalModel || '__current__'}
+                            onValueChange={(value) =>
+                              onSettingsChange((prev) => ({
+                                ...prev,
+                                context: {
+                                  ...prev.context,
+                                  summaryExternalModel:
+                                    value === '__current__' ? '' : value,
+                                },
+                              }))
+                            }
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder={t('使用渠道当前模型')} />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value='__current__'>
+                                {t('使用渠道当前模型')}
+                              </SelectItem>
+                              {(
+                                settings.externalProviders.find(
+                                  (provider) =>
+                                    provider.id ===
+                                    (settings.context.summaryExternalProviderId ||
+                                      settings.activeExternalProviderId)
+                                )?.models || []
+                              ).map((model) => (
+                                <SelectItem key={model.value} value={model.value}>
+                                  {model.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </>
+                    ) : (
+                      <div className='space-y-1.5 md:col-span-2'>
+                        <Label>{t('摘要模型')}</Label>
+                        <Select
+                          value={settings.context.summaryBuiltinModel || '__current__'}
+                          onValueChange={(value) =>
+                            onSettingsChange((prev) => ({
+                              ...prev,
+                              context: {
+                                ...prev.context,
+                                summaryBuiltinModel:
+                                  value === '__current__' ? '' : value,
+                              },
+                            }))
+                          }
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder={t('默认使用当前模型')} />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value='__current__'>
+                              {t('默认使用当前模型')}
+                            </SelectItem>
+                            {builtinModels.map((model) => (
+                              <SelectItem key={model.value} value={model.value}>
+                                {model.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>

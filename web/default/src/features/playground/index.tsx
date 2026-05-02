@@ -33,6 +33,7 @@ import { getCommonHeaders } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import {
   chargeExternalAgentRequestFee,
+  sendChatCompletion,
   getUserModels,
   getUserGroups,
 } from './api'
@@ -50,7 +51,7 @@ import {
   buildAgentToolReviewResults,
   buildChatCompletionPayload,
   calculateAgentContextUsage,
-  compactAgentConversationIfNeeded,
+  prepareAgentContextCompaction,
   checkAgentHelperStatus,
   createMessageVersion,
   createUserMessage,
@@ -211,6 +212,187 @@ function buildAgentPromptCacheKey(
 ): string | undefined {
   if (!conversationId) return undefined
   return `xingkong-playground-agent:${conversationId}`
+}
+
+function createAgentContextEventMessage(
+  content: string,
+  status: MessageType['status'] = 'complete'
+): MessageType {
+  return {
+    ...createLoadingAssistantMessage(),
+    isAgentContextEvent: true,
+    status,
+    versions: [createMessageVersion(content)],
+  }
+}
+
+function getMessageCompactionText(message: MessageType): string {
+  if (message.isAgentContextEvent) return ''
+  if (message.isAgentToolResult) {
+    const results = message.agentToolResults || []
+    return [
+      'tool_results:',
+      ...results.map((result) =>
+        [
+          `- ${result.tool} ${result.path || '.'}`,
+          result.ok ? 'ok' : 'failed',
+          result.summary || result.error || result.output || '',
+        ]
+          .filter(Boolean)
+          .join(' | ')
+      ),
+    ].join('\n')
+  }
+  const formatted = isValidMessage(message) ? formatMessageForAPI(message) : null
+  if (!formatted) return ''
+  const content =
+    typeof formatted.content === 'string'
+      ? formatted.content
+      : formatted.content
+          .map((part) => {
+            if (part.type === 'text') return part.text || ''
+            if (part.type === 'image_url') return '[image]'
+            return ''
+          })
+          .join('\n')
+  return `${formatted.role}:\n${content}`
+}
+
+function buildAgentSummaryPrompt(
+  previousSummary: string | undefined,
+  compactedMessages: MessageType[],
+  workspaceName: string
+): string {
+  const transcript = compactedMessages
+    .map(getMessageCompactionText)
+    .filter(Boolean)
+    .join('\n\n---\n\n')
+
+  return [
+    '你是代码 Agent 的上下文压缩器。请把旧对话压缩成后续 Agent 可以继续工作的摘要。',
+    '',
+    '要求:',
+    '- 用中文输出，结构清晰但不要冗长。',
+    '- 保留用户目标、硬性约束、已完成修改、未完成任务、关键文件路径、重要命令结果和风险。',
+    '- 工具输出只保留对后续有用的事实，不要机械复述长日志。',
+    '- 不要引用旧的 function_call/call_id，也不要要求读取已压缩消息。',
+    '- 后续如果需要文件细节，Agent 应重新读取文件。',
+    '',
+    `工作目录: ${workspaceName || '未选择'}`,
+    previousSummary ? `\n已有摘要:\n${previousSummary}` : '',
+    '',
+    '需要压缩的旧对话:',
+    transcript || '(empty)',
+  ].join('\n')
+}
+
+function extractExternalResponsesText(payload: unknown): string {
+  const response = payload as {
+    output_text?: string
+    output?: Array<{
+      content?: Array<{ text?: string; type?: string }>
+    }>
+  }
+  if (response.output_text) return response.output_text
+  return (response.output || [])
+    .flatMap((item) => item.content || [])
+    .map((part) => part.text || '')
+    .join('')
+}
+
+async function requestAgentContextSummaryModel(
+  prompt: string,
+  settings: AgentSettings,
+  config: PlaygroundConfig,
+  externalProviders: AgentExternalProvider[]
+): Promise<string> {
+  if (settings.context.summaryProviderKind === 'external') {
+    const provider =
+      externalProviders.find(
+        (item) => item.id === settings.context.summaryExternalProviderId
+      ) ||
+      externalProviders.find((item) => item.id === settings.activeExternalProviderId) ||
+      externalProviders[0]
+    if (!provider) throw new Error('summary_external_provider_missing')
+    const model =
+      settings.context.summaryExternalModel ||
+      provider.selectedModel ||
+      provider.models[0]?.value
+    if (!model) throw new Error('summary_external_model_missing')
+
+    await chargeExternalRequestFeeOnce()
+    if (provider.endpointType === 'responses') {
+      const response = await fetch(externalEndpoint(provider.baseUrl, '/responses'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${provider.apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          instructions: '你只负责压缩 Agent 上下文，直接输出摘要正文。',
+          input: prompt,
+          stream: false,
+        }),
+      })
+      if (!response.ok) {
+        throw new Error(`summary_http_${response.status}: ${await response.text()}`)
+      }
+      const text = extractExternalResponsesText(await response.json()).trim()
+      if (!text) throw new Error('summary_empty')
+      return text
+    }
+
+    const response = await fetch(
+      externalEndpoint(provider.baseUrl, '/chat/completions'),
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${provider.apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            {
+              role: 'system',
+              content: '你只负责压缩 Agent 上下文，直接输出摘要正文。',
+            },
+            { role: 'user', content: prompt },
+          ],
+          stream: false,
+          temperature: 0.2,
+        }),
+      }
+    )
+    if (!response.ok) {
+      throw new Error(`summary_http_${response.status}: ${await response.text()}`)
+    }
+    const payload = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string } }>
+    }
+    const text = payload.choices?.[0]?.message?.content?.trim()
+    if (!text) throw new Error('summary_empty')
+    return text
+  }
+
+  const model = settings.context.summaryBuiltinModel || config.model
+  const response = await sendChatCompletion({
+    model,
+    group: config.group || DEFAULT_GROUP,
+    stream: false,
+    temperature: 0.2,
+    messages: [
+      {
+        role: 'system',
+        content: '你只负责压缩 Agent 上下文，直接输出摘要正文。',
+      },
+      { role: 'user', content: prompt },
+    ],
+  })
+  const text = response.choices?.[0]?.message?.content?.trim()
+  if (!text) throw new Error('summary_empty')
+  return text
 }
 
 function toResponsesInputContent(
@@ -1409,6 +1591,7 @@ export function Playground() {
   const lastSavedHelperHistoryRef = useRef('')
   const helperStatusMissesRef = useRef(0)
   const [isAgentRunning, setIsAgentRunning] = useState(false)
+  const [isAgentCompacting, setIsAgentCompacting] = useState(false)
   const pendingAgentApprovalsRef = useRef<
     Map<string, (approved: boolean) => void>
   >(new Map())
@@ -1584,7 +1767,7 @@ export function Playground() {
     parameterEnabled,
     onMessageUpdate: updateMessages,
   })
-  const isBusy = isGenerating || isAgentRunning
+  const isBusy = isGenerating || isAgentRunning || isAgentCompacting
 
   useEffect(() => {
     if (!isAgentMode) return
@@ -2081,6 +2264,110 @@ export function Playground() {
     [requestToolApproval, t, updateMessages]
   )
 
+  const compactAgentMessages = useCallback(
+    async ({
+      currentConversation,
+      currentMessages,
+      currentAgentSettings,
+      runtimeWorkspaceName,
+      force = false,
+      showStatus = true,
+    }: {
+      currentConversation: typeof activeConversation
+      currentMessages: MessageType[]
+      currentAgentSettings: AgentSettings
+      runtimeWorkspaceName: string
+      force?: boolean
+      showStatus?: boolean
+    }): Promise<{
+      changed: boolean
+      messages: MessageType[]
+      summary?: string
+      compactedBeforeKey?: string
+      usage: ReturnType<typeof calculateAgentContextUsage>
+    }> => {
+      const plan = prepareAgentContextCompaction(
+        currentConversation,
+        currentMessages,
+        currentAgentSettings.context,
+        runtimeWorkspaceName,
+        force
+      )
+      if (!plan.changed) {
+        updateActiveConversationMeta({ agentContextUsage: plan.usage })
+        return { changed: false, messages: currentMessages, usage: plan.usage }
+      }
+
+      let nextMessages = currentMessages
+      let statusMessageKey: string | null = null
+      if (showStatus) {
+        const statusMessage = createAgentContextEventMessage(
+          t('正在压缩上下文...'),
+          'loading'
+        )
+        statusMessageKey = statusMessage.key
+        nextMessages = [...nextMessages, statusMessage]
+        updateMessages(nextMessages)
+      }
+
+      setIsAgentCompacting(true)
+      let summary = plan.localSummary || ''
+      let usedFallback = false
+      try {
+        const prompt = buildAgentSummaryPrompt(
+          plan.previousSummary,
+          plan.compactedMessages,
+          runtimeWorkspaceName
+        )
+        summary = await requestAgentContextSummaryModel(
+          prompt,
+          currentAgentSettings,
+          config,
+          currentAgentSettings.externalProviders
+        )
+      } catch (error) {
+        usedFallback = true
+        toast.warning(t('摘要模型压缩失败，已使用本地摘要兜底'), {
+          description: error instanceof Error ? error.message : String(error),
+        })
+      } finally {
+        setIsAgentCompacting(false)
+      }
+
+      const usage = calculateAgentContextUsage(
+        plan.tailMessages,
+        currentAgentSettings.context,
+        summary.length ? Math.ceil(summary.length / 4) : 0
+      )
+      const divider = createAgentContextEventMessage(
+        usedFallback ? t('上下文已压缩，本轮使用本地兜底摘要') : t('上下文已压缩'),
+        'complete'
+      )
+      nextMessages = statusMessageKey
+        ? nextMessages.map((message) =>
+            message.key === statusMessageKey ? divider : message
+          )
+        : [...nextMessages, divider]
+
+      updateMessages(nextMessages)
+      updateActiveConversationMeta({
+        agentContextSummary: summary,
+        agentContextSummaryUpdatedAt: Date.now(),
+        agentContextCompactedBeforeKey: plan.compactedBeforeKey,
+        agentContextUsage: usage,
+      })
+
+      return {
+        changed: true,
+        messages: nextMessages,
+        summary,
+        compactedBeforeKey: plan.compactedBeforeKey,
+        usage,
+      }
+    },
+    [config, t, updateActiveConversationMeta, updateMessages]
+  )
+
   const runAgentConversation = useCallback(
     async (
       initialMessages: MessageType[],
@@ -2281,12 +2568,13 @@ export function Playground() {
           updateMessages(workingMessages)
 
           if (toolCalls.length === 0) {
-            const compaction = compactAgentConversationIfNeeded(
-              contextConversation,
-              workingMessages,
-              currentAgentSettings.context,
-              runtimeWorkspaceName
-            )
+            const compaction = await compactAgentMessages({
+              currentConversation: contextConversation,
+              currentMessages: workingMessages,
+              currentAgentSettings,
+              runtimeWorkspaceName,
+            })
+            workingMessages = compaction.messages
             if (compaction.changed) {
               contextConversation = contextConversation
                 ? {
@@ -2299,16 +2587,6 @@ export function Playground() {
                   }
                 : contextConversation
             }
-            updateActiveConversationMeta({
-              ...(compaction.changed
-                ? {
-                    agentContextSummary: compaction.summary,
-                    agentContextSummaryUpdatedAt: Date.now(),
-                    agentContextCompactedBeforeKey: compaction.compactedBeforeKey,
-                  }
-                : {}),
-              agentContextUsage: compaction.usage,
-            })
             return
           }
 
@@ -2324,12 +2602,13 @@ export function Playground() {
           ]
           updateMessages(workingMessages)
 
-          const compaction = compactAgentConversationIfNeeded(
-            contextConversation,
-            workingMessages,
-            currentAgentSettings.context,
-            runtimeWorkspaceName
-          )
+          const compaction = await compactAgentMessages({
+            currentConversation: contextConversation,
+            currentMessages: workingMessages,
+            currentAgentSettings,
+            runtimeWorkspaceName,
+          })
+          workingMessages = compaction.messages
           if (compaction.changed) {
             contextConversation = contextConversation
               ? {
@@ -2340,16 +2619,6 @@ export function Playground() {
                   agentContextUsage: compaction.usage,
                 }
               : contextConversation
-            updateActiveConversationMeta({
-              agentContextSummary: compaction.summary,
-              agentContextSummaryUpdatedAt: Date.now(),
-              agentContextCompactedBeforeKey: compaction.compactedBeforeKey,
-              agentContextUsage: compaction.usage,
-            })
-          } else {
-            updateActiveConversationMeta({
-              agentContextUsage: compaction.usage,
-            })
           }
         }
 
@@ -2401,6 +2670,7 @@ export function Playground() {
     },
     [
       config,
+      compactAgentMessages,
       executeToolCallsWithApproval,
       usableHelperStatus,
       parameterEnabled,
@@ -2457,6 +2727,19 @@ export function Playground() {
 
     // Send chat request
     sendChat(newMessages)
+  }
+
+  const handleCompactContextNow = () => {
+    if (!isAgentMode || isBusy) return
+    if (!activeConversation) return
+    void compactAgentMessages({
+      currentConversation: activeConversation,
+      currentMessages: messages,
+      currentAgentSettings: agentSettings,
+      runtimeWorkspaceName: activeWorkspaceName,
+      force: true,
+      showStatus: true,
+    })
   }
 
   const handleCopyMessage = (message: MessageType) => {
@@ -2736,6 +3019,8 @@ export function Playground() {
           groupValue={isAgentMode ? activeAgentChannelValue : config.group}
           groupLabel={isAgentMode ? t('渠道') : undefined}
           contextUsage={isAgentMode ? contextUsage : undefined}
+          canCompactContext={isAgentMode && !isBusy && messages.length > 2}
+          isCompactingContext={isAgentCompacting}
           isGenerating={isBusy}
           isModelLoading={isLoadingModels}
           modelValue={isAgentMode ? activeAgentModelValue : config.model}
@@ -2756,6 +3041,7 @@ export function Playground() {
             updateConfig('openaiFastMode', value === 'fast')
           }}
           onStop={isAgentMode ? stopAgentGeneration : stopGeneration}
+          onCompactContextNow={handleCompactContextNow}
           onSubmit={handleSendMessage}
           agentMode={isAgentMode}
         />
@@ -2779,6 +3065,7 @@ export function Playground() {
         onOpenChange={setIsAgentSettingsOpen}
         settings={agentSettings}
         onSettingsChange={updateAgentSettings}
+        builtinModels={models}
       />
 
       <Dialog

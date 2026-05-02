@@ -21,6 +21,7 @@ function estimateTokensFromText(text: string): number {
 }
 
 function getMessageText(message: Message): string {
+  if (message.isAgentContextEvent) return ''
   const formatted = isValidMessage(message) ? formatMessageForAPI(message) : null
   if (!formatted) return ''
   if (typeof formatted.content === 'string') return formatted.content
@@ -130,15 +131,18 @@ export function buildModelVisibleAgentMessages(
   workingMessages: Message[],
   settings: AgentContextSettings
 ): Message[] {
+  const modelMessages = workingMessages.filter(
+    (message) => !message.isAgentContextEvent
+  )
   if (!settings.enabled || !conversation?.agentContextSummary) {
-    return workingMessages
+    return modelMessages
   }
 
   const compactedBeforeKey = conversation.agentContextCompactedBeforeKey
   const startIndex = compactedBeforeKey
-    ? workingMessages.findIndex((message) => message.key === compactedBeforeKey)
+    ? modelMessages.findIndex((message) => message.key === compactedBeforeKey)
     : -1
-  const tail = startIndex >= 0 ? workingMessages.slice(startIndex) : workingMessages
+  const tail = startIndex >= 0 ? modelMessages.slice(startIndex) : modelMessages
   return [buildCompactionSummaryMessage(conversation.agentContextSummary), ...tail]
 }
 
@@ -234,5 +238,68 @@ export function compactAgentConversationIfNeeded(
     summary,
     compactedBeforeKey: tailMessages[0]?.key,
     usage,
+  }
+}
+
+export function prepareAgentContextCompaction(
+  conversation: PlaygroundConversation | undefined,
+  workingMessages: Message[],
+  settings: AgentContextSettings,
+  workspaceName: string,
+  force = false
+): {
+  changed: boolean
+  previousSummary?: string
+  compactedMessages: Message[]
+  tailMessages: Message[]
+  compactedBeforeKey?: string
+  localSummary?: string
+  usage: AgentContextUsage
+} {
+  const modelMessages = workingMessages.filter(
+    (message) => !message.isAgentContextEvent
+  )
+  const baseUsage = calculateAgentContextUsage(
+    modelMessages,
+    settings,
+    conversation?.agentContextSummary
+      ? estimateTokensFromText(conversation.agentContextSummary)
+      : 0
+  )
+  if (!force && !shouldCompactAgentContext(modelMessages, settings)) {
+    return {
+      changed: false,
+      compactedMessages: [],
+      tailMessages: modelMessages,
+      usage: baseUsage,
+    }
+  }
+
+  const tailStart = getRecentTailStartIndex(modelMessages, settings.tailTurns)
+  if (tailStart <= 0) {
+    return {
+      changed: false,
+      compactedMessages: [],
+      tailMessages: modelMessages,
+      usage: baseUsage,
+    }
+  }
+
+  const compactedMessages = modelMessages.slice(0, tailStart)
+  const tailMessages = modelMessages.slice(tailStart)
+  const localSummary = buildAgentContextSummary(
+    conversation?.agentContextSummary,
+    compactedMessages,
+    workspaceName
+  )
+  const summaryTokens = estimateTokensFromText(localSummary)
+  return {
+    changed: true,
+    previousSummary: conversation?.agentContextSummary,
+    compactedMessages,
+    tailMessages,
+    compactedBeforeKey: tailMessages[0]?.key,
+    localSummary,
+    usage: calculateAgentContextUsage(tailMessages, settings, summaryTokens),
   }
 }
