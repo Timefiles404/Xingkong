@@ -65,6 +65,7 @@ function formatToolName(tool: string): string {
     list_dir: '列出目录',
     read_file: '读取文件',
     search_files: '搜索文件',
+    grep: '搜索文本',
     write_file: '写入文件',
     append_file: '追加文件',
     batch_edit: '批量编辑',

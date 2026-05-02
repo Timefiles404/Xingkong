@@ -146,6 +146,7 @@ const AGENT_TOOL_NAMES = new Set<AgentToolName>([
   'list_dir',
   'read_file',
   'search_files',
+  'grep',
   'write_file',
   'append_file',
   'batch_edit',
@@ -201,7 +202,7 @@ function buildAgentInstructions(
 - 不要输出 <agent_tools> XML 或 agent_tools 代码块。
 - 工具返回后继续分析；任务完成时直接给用户自然语言答复。
 - ${helperStatus ? '本地 helper 已连接，可以按需调用 run_command。' : '本地 helper 未连接，不要调用 run_command。'}
-- 调用 run_command 时必须填写非空 command；cwd 只表示相对工作目录，不是命令。列目录优先用 list_dir；若用户明确要求命令行列目录，Windows 用 dir，macOS/Linux 用 ls -la。
+- 调用 run_command 时必须填写非空 command；cwd 只表示相对工作目录，不是命令。列目录优先用 list_dir，可用 depth 获取多层目录；若用户明确要求命令行列目录，Windows 用 dir，macOS/Linux 用 ls -la。
 
 ${workspaceLine}
 ${helperLine}${customPrompt}`
@@ -564,6 +565,11 @@ function buildAgentResponsesTools(
         type: 'object',
         properties: {
           path: { type: 'string', description: '相对目录，默认为 .' },
+          depth: {
+            type: 'integer',
+            description:
+              '递归层数，默认 1，最大 5。单子项目录会继续展开且不消耗层数。',
+          },
         },
       },
     },
@@ -586,6 +592,20 @@ function buildAgentResponsesTools(
       type: 'function',
       name: 'search_files',
       description: '在工作区目录内搜索文本。',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: '相对目录，默认为 .' },
+          query: { type: 'string', description: '搜索关键字' },
+          maxResults: { type: 'integer', description: '最大结果数' },
+        },
+        required: ['query'],
+      },
+    },
+    {
+      type: 'function',
+      name: 'grep',
+      description: '在工作区目录内按关键字搜索文本行，等价于 search_files 的快捷工具。',
       parameters: {
         type: 'object',
         properties: {
@@ -1070,6 +1090,7 @@ function parseResponsesToolCallItem(
     end: numberArg(args.end),
     maxBytes: numberArg(args.maxBytes),
     maxResults: numberArg(args.maxResults),
+    depth: numberArg(args.depth),
     timeoutMs: numberArg(args.timeoutMs) || numberArg(args.timeout_ms),
     edits,
   }

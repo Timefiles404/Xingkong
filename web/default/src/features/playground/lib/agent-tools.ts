@@ -4,6 +4,7 @@ export type AgentToolName =
   | 'list_dir'
   | 'read_file'
   | 'search_files'
+  | 'grep'
   | 'write_file'
   | 'append_file'
   | 'batch_edit'
@@ -27,6 +28,7 @@ export interface AgentToolCall {
   end?: number
   maxBytes?: number
   maxResults?: number
+  depth?: number
   timeoutMs?: number
   edits?: AgentBatchEdit[]
 }
@@ -116,6 +118,7 @@ const SUPPORTED_TOOLS: AgentToolName[] = [
   'list_dir',
   'read_file',
   'search_files',
+  'grep',
   'write_file',
   'append_file',
   'batch_edit',
@@ -134,9 +137,10 @@ export const AGENT_SYSTEM_PROMPT = `你是运行在网页端的 Agent。你不�
 - 当你提到工作区内文件时，优先使用 Markdown 文件引用: [文件名](file://相对路径)，不要使用绝对路径。
 
 可用工具:
-- list_dir: 列出目录。
+- list_dir: 列出目录。可用 depth 指定递归层数；若某个目录下只有一个子项，会继续向下展开且不消耗递归层数。
 - read_file: 读取文本文件。默认读取前 100 行；可用 start/end 指定 1 起始闭区间。
 - search_files: 在目录内搜索文本。
+- grep: search_files 的更直接别名，用于按关键字快速定位文件行。
 - write_file: 覆盖写入文本文件。
 - append_file: 追加文本。
 - batch_edit: 对同一文件执行多处精确替换。
@@ -146,9 +150,10 @@ export const AGENT_SYSTEM_PROMPT = `你是运行在网页端的 Agent。你不�
 路径必须使用相对路径，不能使用绝对路径或 ..。
 需要使用工具时，优先输出 XML 工具块，不要夹杂解释:
 <agent_tools>
-  <tool name="list_dir"><path>.</path></tool>
+  <tool name="list_dir"><path>.</path><depth>2</depth></tool>
   <tool name="read_file"><path>src/app.ts</path><start>1</start><end>80</end></tool>
   <tool name="search_files"><path>.</path><query>TODO</query><maxResults>20</maxResults></tool>
+  <tool name="grep"><path>.</path><query>TODO</query><maxResults>20</maxResults></tool>
   <tool name="batch_edit"><path>README.md</path><edit><find>old</find><replace>new</replace></edit></tool>
   <tool name="run_command"><cwd>.</cwd><command>npm test</command><timeoutMs>120000</timeoutMs></tool>
 </agent_tools>
@@ -472,7 +477,7 @@ async function executeAgentToolCall(
           tool: call.tool,
           path,
           ok: true,
-          output: await listDir(runtime.root, path),
+          output: await listDir(runtime.root, path, call.depth),
         }
       case 'read_file':
         return {
@@ -490,7 +495,8 @@ async function executeAgentToolCall(
               ? `lines ${call.start || 1}-${call.end || call.start || 100}`
               : 'first 100 lines read',
         }
-      case 'search_files': {
+      case 'search_files':
+      case 'grep': {
         const searchResult = await searchFiles(runtime.root, path, call.query || '', {
           maxResults: call.maxResults,
         })
@@ -591,6 +597,7 @@ function parseXmlAgentToolCalls(content: string): AgentToolCall[] {
       end: parseOptionalInt(getXmlTag(body, 'end')),
       maxBytes: parseOptionalInt(getXmlTag(body, 'maxBytes')),
       maxResults: parseOptionalInt(getXmlTag(body, 'maxResults')),
+      depth: parseOptionalInt(getXmlTag(body, 'depth')),
       timeoutMs:
         parseOptionalInt(getXmlTag(body, 'timeoutMs')) ||
         parseOptionalInt(getXmlTag(body, 'timeout_ms')),
@@ -685,6 +692,7 @@ async function executeHelperToolCall(call: AgentToolCall): Promise<AgentToolResu
     end: call.end,
     max_bytes: call.maxBytes,
     max_results: call.maxResults,
+    depth: call.depth,
     edits: call.edits,
   })
 
@@ -847,18 +855,78 @@ async function getParentDirectoryAndName(
   return { dir, name }
 }
 
-async function listDir(root: FileSystemDirectoryHandle, path: string): Promise<string> {
+async function listDir(
+  root: FileSystemDirectoryHandle,
+  path: string,
+  depth?: number
+): Promise<string> {
   const dir = (await getDirectoryHandle(root, path)) as BrowserFileSystemDirectoryHandle
-  const entries: string[] = []
-  const iterator = dir.entries?.()
+  const maxDepth = normalizeListDepth(depth)
+  const base = normalizePath(path).join('/')
+  const lines = await listDirTree(dir, base, maxDepth, 0, '')
+  return lines.join('\n') || '(empty directory)'
+}
 
+function normalizeListDepth(depth?: number): number {
+  if (typeof depth !== 'number' || !Number.isFinite(depth)) return 1
+  return Math.max(1, Math.min(Math.floor(depth || 1), 5))
+}
+
+async function sortedDirectoryEntries(
+  dir: FileSystemDirectoryHandle
+): Promise<Array<[string, FileSystemHandle]>> {
+  const iterator = (dir as BrowserFileSystemDirectoryHandle).entries?.()
   if (!iterator) throw new Error('directory_iteration_unavailable')
+  const entries: Array<[string, FileSystemHandle]> = []
+  for await (const entry of iterator) {
+    entries.push(entry)
+  }
+  return entries.sort((a, b) => {
+    if (a[1].kind !== b[1].kind) return a[1].kind === 'directory' ? -1 : 1
+    return a[0].localeCompare(b[0])
+  })
+}
 
-  for await (const [name, handle] of iterator) {
-    entries.push(`${handle.kind === 'directory' ? 'dir ' : 'file'}\t${name}`)
+async function listDirTree(
+  dir: FileSystemDirectoryHandle,
+  basePath: string,
+  remainingDepth: number,
+  level: number,
+  prefix: string
+): Promise<string[]> {
+  const entries = await sortedDirectoryEntries(dir)
+  const visible = entries.filter(([name]) => name !== '.xkagent')
+  const lines: string[] = []
+
+  for (const [name, handle] of visible) {
+    const currentPath = [basePath, name].filter(Boolean).join('/')
+    const label = `${prefix}${handle.kind === 'directory' ? 'dir ' : 'file'}\t${currentPath || name}`
+    lines.push(label)
+
+    if (handle.kind !== 'directory') continue
+    const childDir = handle as FileSystemDirectoryHandle
+    const childEntries = await sortedDirectoryEntries(childDir)
+    const childVisible = childEntries.filter(([childName]) => childName !== '.xkagent')
+    const shouldCollapseSingleChild = childVisible.length === 1
+    const shouldRecurse =
+      remainingDepth > 1 || shouldCollapseSingleChild
+    if (!shouldRecurse) continue
+
+    const nextDepth = shouldCollapseSingleChild
+      ? remainingDepth
+      : remainingDepth - 1
+    lines.push(
+      ...(await listDirTree(
+        childDir,
+        currentPath,
+        nextDepth,
+        level + 1,
+        `${'  '.repeat(level + 1)}`
+      ))
+    )
   }
 
-  return entries.sort().join('\n') || '(empty directory)'
+  return lines
 }
 
 export async function listWorkspaceEntries(
