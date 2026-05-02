@@ -49,6 +49,8 @@ export interface AgentHelperStatus {
   workspace: string
   shell: string
   workspace_warning?: string
+  paired?: boolean
+  pairing_required?: boolean
 }
 
 export interface AgentHelperDownloadTarget {
@@ -86,6 +88,7 @@ const MAX_SEARCH_RESULTS = 50
 const SEARCH_READ_BYTES = 512 * 1024
 const AGENT_HELPER_BASE_URL = 'http://127.0.0.1:8787'
 const AGENT_HELPER_PROTOCOL_URL = 'xingkong-helper://start'
+const AGENT_HELPER_TOKEN_STORAGE_KEY = 'newapi.agent.helper.token'
 
 const SUPPORTED_TOOLS: AgentToolName[] = [
   'list_dir',
@@ -157,6 +160,53 @@ export async function checkAgentHelperStatus(
   } finally {
     window.clearTimeout(timer)
   }
+}
+
+export function isAgentHelperPaired(status: AgentHelperStatus | null): boolean {
+  if (!status) return false
+  return !status.pairing_required || status.paired === true
+}
+
+export function generateAgentHelperPairCode(): string {
+  const bytes = new Uint8Array(8)
+  globalThis.crypto?.getRandomValues?.(bytes)
+  return Array.from(bytes, (value) => `${value % 10}`).join('')
+}
+
+export function getStoredAgentHelperToken(): string {
+  try {
+    return window.localStorage.getItem(AGENT_HELPER_TOKEN_STORAGE_KEY) || ''
+  } catch {
+    return ''
+  }
+}
+
+export function setStoredAgentHelperToken(token: string): void {
+  try {
+    if (token) {
+      window.localStorage.setItem(AGENT_HELPER_TOKEN_STORAGE_KEY, token)
+    } else {
+      window.localStorage.removeItem(AGENT_HELPER_TOKEN_STORAGE_KEY)
+    }
+  } catch {
+    // localStorage may be blocked; command execution will request pairing again.
+  }
+}
+
+export async function pairAgentHelper(code: string): Promise<void> {
+  const response = await fetch(`${AGENT_HELPER_BASE_URL}/v1/pair`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ code }),
+  })
+  if (!response.ok) {
+    throw new Error(`helper_pair_http_${response.status}`)
+  }
+  const result = (await response.json()) as { token?: string }
+  if (!result.token) throw new Error('helper_pair_token_missing')
+  setStoredAgentHelperToken(result.token)
 }
 
 export async function requestWorkspaceDirectory(): Promise<FileSystemDirectoryHandle> {
@@ -234,8 +284,21 @@ export async function downloadAgentHelperToWorkspace(
   return helper.fileName
 }
 
-export function launchAgentHelperProtocol(): void {
-  window.location.href = AGENT_HELPER_PROTOCOL_URL
+export function launchAgentHelperProtocol(pairCode?: string): void {
+  const url = pairCode
+    ? `${AGENT_HELPER_PROTOCOL_URL}?pair_code=${encodeURIComponent(pairCode)}`
+    : AGENT_HELPER_PROTOCOL_URL
+  window.location.href = url
+}
+
+export function buildAgentHelperManualCommand(
+  helperFileName: string,
+  pairCode: string
+): string {
+  if (helperFileName.endsWith('.exe')) {
+    return `${helperFileName} --pair-code ${pairCode}`
+  }
+  return `./${helperFileName} --pair-code ${pairCode}`
 }
 
 export function parseAgentToolCalls(content: string): AgentToolCall[] {
@@ -534,6 +597,7 @@ async function runLocalCommand(call: AgentToolCall): Promise<AgentToolResult> {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      'X-Xingkong-Helper-Token': getStoredAgentHelperToken(),
     },
     body: JSON.stringify({
       command,
@@ -543,6 +607,10 @@ async function runLocalCommand(call: AgentToolCall): Promise<AgentToolResult> {
   })
 
   if (!response.ok) {
+    if (response.status === 401) {
+      setStoredAgentHelperToken('')
+      throw new Error('helper_not_paired')
+    }
     throw new Error(`helper_http_${response.status}`)
   }
 

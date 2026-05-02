@@ -2,14 +2,23 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   BotIcon,
+  ChevronDownIcon,
+  CopyIcon,
   DownloadIcon,
   FolderOpenIcon,
   MessageCircleIcon,
+  PlayIcon,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { SSE } from 'sse.js'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { getCommonHeaders } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { getUserModels, getUserGroups } from './api'
@@ -21,6 +30,7 @@ import { API_ENDPOINTS, DEFAULT_GROUP } from './constants'
 import { usePlaygroundState, useChatHandler } from './hooks'
 import {
   AGENT_SYSTEM_PROMPT,
+  buildAgentHelperManualCommand,
   buildAgentToolReviewResults,
   buildChatCompletionPayload,
   checkAgentHelperStatus,
@@ -32,14 +42,17 @@ import {
   finalizeMessage,
   formatMessageForAPI,
   formatAgentToolResults,
+  generateAgentHelperPairCode,
   getCompleteAgentToolBlockEnd,
   getAgentHelperDownloadTarget,
+  isAgentHelperPaired,
   getVisibleAgentContent,
   isOpenAIFastMode,
   isOpenAIReasoningModel,
   isValidMessage,
   isFileSystemAccessSupported,
   launchAgentHelperProtocol,
+  pairAgentHelper,
   parseAgentToolCalls,
   requestWorkspaceDirectory,
   requiresAgentToolApproval,
@@ -89,6 +102,12 @@ interface ResponsesFunctionCallAccumulator {
   name?: string
   arguments: string
   done: boolean
+}
+
+function isWorkspaceMutatingToolCall(call: AgentToolCall): boolean {
+  return ['write_file', 'append_file', 'batch_edit', 'create_dir'].includes(
+    call.tool
+  )
 }
 
 const AGENT_TOOL_NAMES = new Set<AgentToolName>([
@@ -1187,6 +1206,10 @@ export function Playground() {
   const [agentHelperStatus, setAgentHelperStatus] =
     useState<AgentHelperStatus | null>(null)
   const [isHelperDownloading, setIsHelperDownloading] = useState(false)
+  const [isHelperPairing, setIsHelperPairing] = useState(false)
+  const [helperPairCode, setHelperPairCode] = useState('')
+  const [helperManualCommand, setHelperManualCommand] = useState('')
+  const [workspaceRefreshKey, setWorkspaceRefreshKey] = useState(0)
   const [isAgentRunning, setIsAgentRunning] = useState(false)
   const pendingAgentApprovalsRef = useRef<
     Map<string, (approved: boolean) => void>
@@ -1201,6 +1224,8 @@ export function Playground() {
     ? workspaceHandles[activeConversationId]
     : undefined
   const isAgentMode = mode === 'agent'
+  const isHelperConnected = isAgentHelperPaired(agentHelperStatus)
+  const usableHelperStatus = isHelperConnected ? agentHelperStatus : null
   const visibleConversations = conversations.filter(
     (conversation) => (conversation.mode || 'chat') === mode
   )
@@ -1305,11 +1330,16 @@ export function Playground() {
     }
   }, [activeConversationId, t, updateActiveConversationMeta])
 
-  const handleInstallOrLaunchHelper = useCallback(async () => {
+  const ensureWorkspaceForHelper = useCallback(async () => {
     let workspace = activeWorkspaceHandle
     if (!workspace) {
       workspace = await pickWorkspace()
     }
+    return workspace || null
+  }, [activeWorkspaceHandle, pickWorkspace])
+
+  const handleDownloadHelper = useCallback(async () => {
+    const workspace = await ensureWorkspaceForHelper()
     if (!workspace) return
 
     const target = getAgentHelperDownloadTarget()
@@ -1323,18 +1353,10 @@ export function Playground() {
       toast.success(
         t('Helper downloaded to workspace: {{fileName}}', { fileName })
       )
-      launchAgentHelperProtocol()
-      window.setTimeout(async () => {
-        const status = await checkAgentHelperStatus(2500)
-        setAgentHelperStatus(status)
-        if (!status) {
-          toast.info(
-            t(
-              'If helper is not started, run it from the selected folder. Protocol launch requires --install-protocol.'
-            )
-          )
-        }
-      }, 2000)
+      const code = helperPairCode || generateAgentHelperPairCode()
+      setHelperPairCode(code)
+      setHelperManualCommand(buildAgentHelperManualCommand(fileName, code))
+      toast.info(t('Helper downloaded. Start it from the helper menu.'))
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : t('Failed to download helper')
@@ -1342,7 +1364,65 @@ export function Playground() {
     } finally {
       setIsHelperDownloading(false)
     }
-  }, [activeWorkspaceHandle, pickWorkspace, t])
+  }, [ensureWorkspaceForHelper, helperPairCode, t])
+
+  const refreshAgentHelperStatus = useCallback(async () => {
+    const status = await checkAgentHelperStatus(2500)
+    setAgentHelperStatus(status)
+    return status
+  }, [])
+
+  const handlePairHelper = useCallback(
+    async (code: string) => {
+      if (!code) return
+      setIsHelperPairing(true)
+      try {
+        await pairAgentHelper(code)
+        const status = await refreshAgentHelperStatus()
+        setAgentHelperStatus(status)
+        if (isAgentHelperPaired(status)) {
+          toast.success(t('Helper paired'))
+          setHelperPairCode('')
+          setHelperManualCommand('')
+        } else {
+          toast.info(t('Helper is reachable but not paired yet'))
+        }
+      } catch (error) {
+        toast.error(
+          error instanceof Error ? error.message : t('Failed to pair helper')
+        )
+      } finally {
+        setIsHelperPairing(false)
+      }
+    },
+    [refreshAgentHelperStatus, t]
+  )
+
+  const handleStartHelper = useCallback(async () => {
+    const workspace = await ensureWorkspaceForHelper()
+    if (!workspace) return
+
+    const target = getAgentHelperDownloadTarget()
+    const code = generateAgentHelperPairCode()
+    setHelperPairCode(code)
+    setHelperManualCommand(buildAgentHelperManualCommand(target.fileName, code))
+    launchAgentHelperProtocol(code)
+
+    window.setTimeout(async () => {
+      const status = await refreshAgentHelperStatus()
+      if (status) {
+        await handlePairHelper(code)
+        return
+      }
+      toast.info(t('Helper launch failed. Use the pairing code below.'))
+    }, 2000)
+  }, [ensureWorkspaceForHelper, handlePairHelper, refreshAgentHelperStatus, t])
+
+  const handleCopyManualHelperCommand = useCallback(async () => {
+    if (!helperManualCommand || !navigator?.clipboard?.writeText) return
+    await navigator.clipboard.writeText(helperManualCommand)
+    toast.success(t('Command copied'))
+  }, [helperManualCommand, t])
 
   const handleModeChange = useCallback(
     (nextMode: PlaygroundMode) => {
@@ -1517,6 +1597,9 @@ export function Playground() {
         const runningMessage = createToolMessage('running')
         updateMessages([...workingMessages, runningMessage])
         const results = await executeAgentToolCalls(workspace, calls)
+        if (calls.some(isWorkspaceMutatingToolCall)) {
+          setWorkspaceRefreshKey((value) => value + 1)
+        }
         return {
           results,
           messages: [...workingMessages, createToolMessage('complete', results)],
@@ -1538,6 +1621,9 @@ export function Playground() {
         }
         updateMessages([...workingMessages, runningMessage])
         const results = await executeAgentToolCalls(workspace, calls)
+        if (calls.some(isWorkspaceMutatingToolCall)) {
+          setWorkspaceRefreshKey((value) => value + 1)
+        }
         const completedMessage = {
           ...createToolMessage('complete', results),
           key: approvalMessage.key,
@@ -1571,6 +1657,9 @@ export function Playground() {
               ...deniedResults,
             ]
           : deniedResults
+      if (safeCalls.some(isWorkspaceMutatingToolCall)) {
+        setWorkspaceRefreshKey((value) => value + 1)
+      }
       const completedMessage = {
         ...createToolMessage('complete', results),
         key: approvalMessage.key,
@@ -1655,7 +1744,7 @@ export function Playground() {
               parameterEnabled,
               workspace.name,
               conversationId,
-              agentHelperStatus
+              usableHelperStatus
             )
             if (payload.input.length === 0) {
               throw new Error('responses_input_empty')
@@ -1672,7 +1761,7 @@ export function Playground() {
           } else {
             const payload = buildChatCompletionPayload(
               [
-                createAgentSystemMessage(workspace.name, agentHelperStatus),
+                createAgentSystemMessage(workspace.name, usableHelperStatus),
                 ...workingMessages,
               ],
               { ...config, stream: true },
@@ -1786,7 +1875,7 @@ export function Playground() {
     [
       config,
       executeToolCallsWithApproval,
-      agentHelperStatus,
+      usableHelperStatus,
       parameterEnabled,
       t,
       updateMessages,
@@ -1901,6 +1990,7 @@ export function Playground() {
       {isAgentMode && (
         <PlaygroundFileSidebar
           disabled={isBusy}
+          refreshKey={workspaceRefreshKey}
           root={activeWorkspaceHandle}
           workspaceName={workspaceName || activeWorkspaceHandle?.name}
         />
@@ -1953,8 +2043,10 @@ export function Playground() {
                 <span
                   className={cn(
                     'rounded-full border px-2 py-1 text-xs',
-                    agentHelperStatus
+                    isHelperConnected
                       ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                      : agentHelperStatus
+                        ? 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300'
                       : 'border-muted-foreground/20 text-muted-foreground'
                   )}
                   title={
@@ -1967,8 +2059,10 @@ export function Playground() {
                 >
                   {agentHelperStatus?.workspace_warning
                     ? t('Helper workspace warning')
-                    : agentHelperStatus
+                    : isHelperConnected
                       ? t('Helper connected')
+                      : agentHelperStatus
+                        ? t('Helper pairing required')
                       : t('Helper offline')}
                 </span>
                 <Button
@@ -1983,19 +2077,78 @@ export function Playground() {
                     ? t('Change folder')
                     : t('Select folder')}
                 </Button>
-                {!agentHelperStatus && (
+                {!isHelperConnected && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        disabled={isBusy || isHelperDownloading || isHelperPairing}
+                        size='sm'
+                        type='button'
+                        variant='outline'
+                      >
+                        <DownloadIcon className='mr-2 size-4' />
+                        {isHelperDownloading
+                          ? t('Downloading helper')
+                          : t('Helper actions')}
+                        <ChevronDownIcon className='ml-2 size-3.5' />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align='end' className='w-48'>
+                      <DropdownMenuItem
+                        disabled={isHelperDownloading}
+                        onClick={() => void handleDownloadHelper()}
+                      >
+                        <DownloadIcon className='mr-2 size-4' />
+                        {t('Download helper')}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => void handleStartHelper()}>
+                        <PlayIcon className='mr-2 size-4' />
+                        {t('Start helper')}
+                      </DropdownMenuItem>
+                      {helperPairCode && (
+                        <DropdownMenuItem
+                          disabled={isHelperPairing}
+                          onClick={() => void handlePairHelper(helperPairCode)}
+                        >
+                          <BotIcon className='mr-2 size-4' />
+                          {isHelperPairing ? t('Pairing helper') : t('Pair helper')}
+                        </DropdownMenuItem>
+                      )}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
+              </div>
+            )}
+            {isAgentMode && helperPairCode && !isHelperConnected && (
+              <div className='bg-background/80 flex flex-col gap-2 rounded-xl border px-3 py-2 text-xs sm:col-span-2'>
+                <div className='flex flex-wrap items-center gap-2'>
+                  <span className='text-muted-foreground'>
+                    {t('Helper pairing code')}
+                  </span>
+                  <code className='rounded-md bg-muted px-2 py-1 font-mono text-sm'>
+                    {helperPairCode}
+                  </code>
                   <Button
-                    disabled={isBusy || isHelperDownloading}
-                    onClick={() => void handleInstallOrLaunchHelper()}
+                    disabled={isHelperPairing}
+                    onClick={() => void handlePairHelper(helperPairCode)}
                     size='sm'
                     type='button'
-                    variant='outline'
+                    variant='secondary'
                   >
-                    <DownloadIcon className='mr-2 size-4' />
-                    {isHelperDownloading
-                      ? t('Downloading helper')
-                      : t('Download or start helper')}
+                    {isHelperPairing ? t('Pairing helper') : t('Pair helper')}
                   </Button>
+                </div>
+                {helperManualCommand && (
+                  <button
+                    className='text-muted-foreground flex min-w-0 items-center gap-2 text-left hover:text-foreground'
+                    onClick={() => void handleCopyManualHelperCommand()}
+                    type='button'
+                  >
+                    <CopyIcon className='size-3.5 shrink-0' />
+                    <span className='truncate'>
+                      {t('Manual start command')}: {helperManualCommand}
+                    </span>
+                  </button>
                 )}
               </div>
             )}

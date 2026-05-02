@@ -22,6 +22,7 @@ interface PlaygroundFileSidebarProps {
   root?: FileSystemDirectoryHandle
   workspaceName?: string
   disabled?: boolean
+  refreshKey?: number
 }
 
 interface FileTreeNodeProps {
@@ -29,6 +30,7 @@ interface FileTreeNodeProps {
   depth: number
   root: FileSystemDirectoryHandle
   disabled?: boolean
+  refreshKey?: number
 }
 
 function FileTreeNode({
@@ -36,6 +38,7 @@ function FileTreeNode({
   depth,
   root,
   disabled = false,
+  refreshKey = 0,
 }: FileTreeNodeProps) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
@@ -55,6 +58,29 @@ function FileTreeNode({
       setLoading(false)
     }
   }, [children, entry.path, isDirectory, root, t])
+
+  useEffect(() => {
+    if (!open || !isDirectory) return
+    let cancelled = false
+    setLoading(true)
+    listWorkspaceEntries(root, entry.path)
+      .then((nextChildren) => {
+        if (!cancelled) setChildren(nextChildren)
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setChildren([])
+          toast.error(t('Failed to read folder'))
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [entry.path, isDirectory, open, refreshKey, root, t])
 
   const toggle = async () => {
     if (!isDirectory) return
@@ -143,6 +169,7 @@ function FileTreeNode({
               disabled={disabled}
               entry={child}
               key={child.path}
+              refreshKey={refreshKey}
               root={root}
             />
           ))}
@@ -156,6 +183,7 @@ export function PlaygroundFileSidebar({
   root,
   workspaceName,
   disabled = false,
+  refreshKey = 0,
 }: PlaygroundFileSidebarProps) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(true)
@@ -187,7 +215,7 @@ export function PlaygroundFileSidebar({
     return () => {
       cancelled = true
     }
-  }, [root, t])
+  }, [refreshKey, root, t])
 
   const title = useMemo(
     () => workspaceName || root?.name || t('Workspace files'),
@@ -246,6 +274,7 @@ export function PlaygroundFileSidebar({
                       disabled={disabled}
                       entry={entry}
                       key={entry.path}
+                      refreshKey={refreshKey}
                       root={root}
                     />
                   ))
