@@ -4230,6 +4230,10 @@
     "Apply": "应用",
     "Reject": "拒绝",
     "Click to review diff": "点击审阅差异",
+    "Start local helper to enable terminal tools": "启动本地 Helper 以启用终端工具",
+    "Helper connected": "Helper 已连接",
+    "Helper workspace warning": "Helper 工作目录异常",
+    "Helper offline": "Helper 未连接",
     "{{error}}，正在重连（{{attempt}}/{{max}}）...": "{{error}}，正在重连（{{attempt}}/{{max}}）...",
     "Generation was interrupted": "生成已停止"
   }

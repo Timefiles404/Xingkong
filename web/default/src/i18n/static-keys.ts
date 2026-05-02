@@ -493,6 +493,10 @@ export const STATIC_I18N_KEYS = [
   'Apply',
   'Reject',
   'Click to review diff',
+  'Start local helper to enable terminal tools',
+  'Helper connected',
+  'Helper workspace warning',
+  'Helper offline',
   '{{error}}，正在重连（{{attempt}}/{{max}}）...',
   'Generation was interrupted',
 

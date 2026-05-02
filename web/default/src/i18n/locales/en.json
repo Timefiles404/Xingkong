@@ -4230,6 +4230,10 @@
     "Apply": "Apply",
     "Reject": "Reject",
     "Click to review diff": "Click to review diff",
+    "Start local helper to enable terminal tools": "Start local helper to enable terminal tools",
+    "Helper connected": "Helper connected",
+    "Helper workspace warning": "Helper workspace warning",
+    "Helper offline": "Helper offline",
     "{{error}}，正在重连（{{attempt}}/{{max}}）...": "{{error}}, reconnecting ({{attempt}}/{{max}})...",
     "Generation was interrupted": "Generation was interrupted"
   }

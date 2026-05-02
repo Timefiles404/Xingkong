@@ -6,6 +6,7 @@ export type AgentToolName =
   | 'append_file'
   | 'batch_edit'
   | 'create_dir'
+  | 'run_command'
 
 export interface AgentBatchEdit {
   find: string
@@ -16,12 +17,15 @@ export interface AgentToolCall {
   id?: string
   tool: AgentToolName
   path?: string
+  cwd?: string
+  command?: string
   content?: string
   query?: string
   start?: number
   end?: number
   maxBytes?: number
   maxResults?: number
+  timeoutMs?: number
   edits?: AgentBatchEdit[]
 }
 
@@ -34,6 +38,29 @@ export interface AgentToolResult {
   output?: string
   diff?: string
   error?: string
+}
+
+export interface AgentHelperStatus {
+  app: string
+  version: string
+  os: string
+  arch: string
+  addr: string
+  workspace: string
+  shell: string
+  workspace_warning?: string
+}
+
+interface AgentHelperExecResponse {
+  ok: boolean
+  command: string
+  cwd: string
+  exit_code: number
+  stdout: string
+  stderr: string
+  duration_ms: number
+  error?: string
+  truncated?: boolean
 }
 
 type BrowserFileSystemDirectoryHandle = FileSystemDirectoryHandle & {
@@ -51,6 +78,7 @@ const MAX_TOOL_CALLS = 8
 const MAX_SEARCH_FILES = 300
 const MAX_SEARCH_RESULTS = 50
 const SEARCH_READ_BYTES = 512 * 1024
+const AGENT_HELPER_BASE_URL = 'http://127.0.0.1:8787'
 
 const SUPPORTED_TOOLS: AgentToolName[] = [
   'list_dir',
@@ -60,9 +88,10 @@ const SUPPORTED_TOOLS: AgentToolName[] = [
   'append_file',
   'batch_edit',
   'create_dir',
+  'run_command',
 ]
 
-export const AGENT_SYSTEM_PROMPT = `你是运行在浏览器网页端的 Agent。你不能访问服务器文件系统，也不能运行终端命令；你只能通过用户已授权的本地工作目录使用文件工具。
+export const AGENT_SYSTEM_PROMPT = `你是运行在浏览器网页端的 Agent。你不能访问服务器文件系统；你只能通过用户已授权的本地工作目录使用文件工具。若本地 helper 已启动，你还可以在用户审批后调用本地命令行工具。
 
 回答风格:
 - 直接、务实、像资深工程师一样给结论和关键依据。
@@ -80,6 +109,7 @@ export const AGENT_SYSTEM_PROMPT = `你是运行在浏览器网页端的 Agent�
 - append_file: 追加文本。
 - batch_edit: 对同一文件执行多处精确替换。
 - create_dir: 创建目录。
+- run_command: 通过本地 helper 在用户电脑的 helper 工作目录里执行终端命令，需要用户审批；必须提供非空 command 参数，cwd 只表示命令运行目录。
 
 路径必须使用相对路径，不能使用绝对路径或 ..。
 需要使用工具时，优先输出 XML 工具块，不要夹杂解释:
@@ -88,7 +118,10 @@ export const AGENT_SYSTEM_PROMPT = `你是运行在浏览器网页端的 Agent�
   <tool name="read_file"><path>src/app.ts</path><start>1</start><end>80</end></tool>
   <tool name="search_files"><path>.</path><query>TODO</query><maxResults>20</maxResults></tool>
   <tool name="batch_edit"><path>README.md</path><edit><find>old</find><replace>new</replace></edit></tool>
+  <tool name="run_command"><cwd>.</cwd><command>npm test</command><timeoutMs>120000</timeoutMs></tool>
 </agent_tools>
+
+列出目录优先使用 list_dir；如果用户明确要求用命令行列目录，Windows 使用 <command>dir</command>，macOS/Linux 使用 <command>ls -la</command>。不要把命令写进 path 或 cwd。
 
 如果模型只能稳定输出 JSON，也可以退回:
 \`\`\`agent_tools
@@ -98,6 +131,25 @@ export const AGENT_SYSTEM_PROMPT = `你是运行在浏览器网页端的 Agent�
 
 export function isFileSystemAccessSupported(): boolean {
   return typeof window !== 'undefined' && 'showDirectoryPicker' in window
+}
+
+export async function checkAgentHelperStatus(
+  timeoutMs = 1500
+): Promise<AgentHelperStatus | null> {
+  const controller = new AbortController()
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetch(`${AGENT_HELPER_BASE_URL}/v1/status`, {
+      method: 'GET',
+      signal: controller.signal,
+    })
+    if (!response.ok) return null
+    return (await response.json()) as AgentHelperStatus
+  } catch {
+    return null
+  } finally {
+    window.clearTimeout(timer)
+  }
 }
 
 export async function requestWorkspaceDirectory(): Promise<FileSystemDirectoryHandle> {
@@ -189,7 +241,10 @@ export async function buildAgentToolReviewResults(
 ): Promise<AgentToolResult[]> {
   return Promise.all(
     calls.slice(0, MAX_TOOL_CALLS).map(async (call) => {
-      const path = call.path?.trim() || '.'
+      const path =
+        call.tool === 'run_command'
+          ? call.cwd?.trim() || '.'
+          : call.path?.trim() || '.'
       const needsApproval = requiresAgentToolApproval(call)
 
       if (!needsApproval) {
@@ -227,9 +282,13 @@ export async function buildAgentToolReviewResults(
 }
 
 export function requiresAgentToolApproval(call: AgentToolCall): boolean {
-  return ['write_file', 'append_file', 'batch_edit', 'create_dir'].includes(
-    call.tool
-  )
+  return [
+    'write_file',
+    'append_file',
+    'batch_edit',
+    'create_dir',
+    'run_command',
+  ].includes(call.tool)
 }
 
 export function formatAgentToolResults(results: AgentToolResult[]): string {
@@ -241,17 +300,19 @@ export function formatAgentToolResults(results: AgentToolResult[]): string {
 }
 
 function isAgentToolCall(value: AgentToolCall): value is AgentToolCall {
-  return (
-    !!value &&
-    SUPPORTED_TOOLS.includes(value.tool)
-  )
+  if (!value || !SUPPORTED_TOOLS.includes(value.tool)) return false
+  if (value.tool === 'run_command') return !!value.command?.trim()
+  return true
 }
 
 async function executeAgentToolCall(
   root: FileSystemDirectoryHandle,
   call: AgentToolCall
 ): Promise<AgentToolResult> {
-  const path = call.path?.trim() || '.'
+  const path =
+    call.tool === 'run_command'
+      ? call.cwd?.trim() || '.'
+      : call.path?.trim() || '.'
 
   try {
     switch (call.tool) {
@@ -333,6 +394,8 @@ async function executeAgentToolCall(
           summary: 'directory created',
           output: 'created',
         }
+      case 'run_command':
+        return await runLocalCommand(call)
       default:
         throw new Error('unsupported_tool')
     }
@@ -362,22 +425,75 @@ function parseXmlAgentToolCalls(content: string): AgentToolCall[] {
     const tool = getXmlAttr(attrs, 'name') as AgentToolName
     if (!SUPPORTED_TOOLS.includes(tool)) continue
 
+    const inlineText = getXmlInlineText(body)
     const call: AgentToolCall = {
       id: getXmlAttr(attrs, 'id') || undefined,
       tool,
-      path: getXmlTag(body, 'path') || '.',
+      path: getXmlTag(body, 'path') || getXmlAttr(attrs, 'path') || '.',
+      cwd: getXmlTag(body, 'cwd') || getXmlAttr(attrs, 'cwd') || undefined,
+      command:
+        getXmlTag(body, 'command') ||
+        getXmlAttr(attrs, 'command') ||
+        (tool === 'run_command' && inlineText !== '.' ? inlineText : undefined),
       content: getXmlTag(body, 'content') || undefined,
       query: getXmlTag(body, 'query') || undefined,
       start: parseOptionalInt(getXmlTag(body, 'start')),
       end: parseOptionalInt(getXmlTag(body, 'end')),
       maxBytes: parseOptionalInt(getXmlTag(body, 'maxBytes')),
       maxResults: parseOptionalInt(getXmlTag(body, 'maxResults')),
+      timeoutMs:
+        parseOptionalInt(getXmlTag(body, 'timeoutMs')) ||
+        parseOptionalInt(getXmlTag(body, 'timeout_ms')),
       edits: parseXmlEdits(body),
     }
     calls.push(call)
   }
 
   return calls.slice(0, MAX_TOOL_CALLS)
+}
+
+async function runLocalCommand(call: AgentToolCall): Promise<AgentToolResult> {
+  const command = call.command?.trim()
+  const cwd = call.cwd?.trim() || '.'
+
+  if (!command) {
+    throw new Error('command_required: run_command 需要非空 command 参数')
+  }
+
+  const response = await fetch(`${AGENT_HELPER_BASE_URL}/v1/exec`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      command,
+      cwd,
+      timeout_ms: call.timeoutMs || 120000,
+    }),
+  })
+
+  if (!response.ok) {
+    throw new Error(`helper_http_${response.status}`)
+  }
+
+  const result = (await response.json()) as AgentHelperExecResponse
+  const output = [
+    result.stdout ? `stdout:\n${result.stdout}` : '',
+    result.stderr ? `stderr:\n${result.stderr}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+    .trim()
+
+  return {
+    id: call.id,
+    tool: call.tool,
+    path: cwd,
+    ok: result.ok,
+    summary: `exit ${result.exit_code}, ${result.duration_ms}ms`,
+    output: output || '(no output)',
+    error: result.ok ? undefined : result.error || `exit ${result.exit_code}`,
+  }
 }
 
 function parseXmlEdits(body: string): AgentBatchEdit[] {
@@ -394,6 +510,12 @@ function parseXmlEdits(body: string): AgentBatchEdit[] {
 function getXmlTag(body: string, tag: string): string {
   const match = body.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'i'))
   return decodeXml(match?.[1]?.trim() || '')
+}
+
+function getXmlInlineText(body: string): string {
+  const trimmed = body.trim()
+  if (!trimmed || /<\w+[\s>]/.test(trimmed)) return ''
+  return decodeXml(trimmed)
 }
 
 function getXmlAttr(attrs: string, name: string): string {
@@ -696,6 +818,10 @@ async function buildToolDiff(
 ): Promise<string> {
   const path = call.path?.trim() || '.'
 
+  if (call.tool === 'run_command') {
+    return `$ cd ${call.cwd?.trim() || '.'}\n$ ${call.command || ''}`
+  }
+
   if (call.tool === 'create_dir') {
     return `+ directory ${path}`
   }
@@ -725,6 +851,7 @@ function describeWriteIntent(call: AgentToolCall): string {
   if (call.tool === 'append_file') return 'append content'
   if (call.tool === 'batch_edit') return `${call.edits?.length || 0} edits`
   if (call.tool === 'create_dir') return 'create directory'
+  if (call.tool === 'run_command') return `run command: ${call.command || ''}`
   return 'ready to run'
 }
 

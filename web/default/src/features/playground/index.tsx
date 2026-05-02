@@ -18,6 +18,7 @@ import {
   AGENT_SYSTEM_PROMPT,
   buildAgentToolReviewResults,
   buildChatCompletionPayload,
+  checkAgentHelperStatus,
   createMessageVersion,
   createUserMessage,
   createLoadingAssistantMessage,
@@ -35,7 +36,12 @@ import {
   requiresAgentToolApproval,
   stripAgentToolBlocks,
 } from './lib'
-import type { AgentToolCall, AgentToolName, AgentToolResult } from './lib'
+import type {
+  AgentHelperStatus,
+  AgentToolCall,
+  AgentToolName,
+  AgentToolResult,
+} from './lib'
 import type {
   Message as MessageType,
   ChatCompletionChunk,
@@ -83,28 +89,38 @@ const AGENT_TOOL_NAMES = new Set<AgentToolName>([
   'append_file',
   'batch_edit',
   'create_dir',
+  'run_command',
 ])
 
-function createAgentSystemMessage(workspaceName: string): MessageType {
+function createAgentSystemMessage(
+  workspaceName: string,
+  helperStatus: AgentHelperStatus | null
+): MessageType {
   return {
     key: 'agent-system',
     from: 'system',
     versions: [
-      createMessageVersion(buildAgentInstructions(workspaceName, false)),
+      createMessageVersion(
+        buildAgentInstructions(workspaceName, false, helperStatus)
+      ),
     ],
   }
 }
 
 function buildAgentInstructions(
   workspaceName: string,
-  useNativeResponsesTools: boolean
+  useNativeResponsesTools: boolean,
+  helperStatus: AgentHelperStatus | null
 ): string {
   const workspaceLine = `当前工作目录: ${workspaceName || '未选择'}`
+  const helperLine = helperStatus
+    ? `本地 helper: 已连接，命令工作目录 ${helperStatus.workspace}，Shell ${helperStatus.shell}`
+    : '本地 helper: 未连接；不要尝试运行终端命令。'
   if (!useNativeResponsesTools) {
-    return `${AGENT_SYSTEM_PROMPT}\n\n${workspaceLine}`
+    return `${AGENT_SYSTEM_PROMPT}\n\n${workspaceLine}\n${helperLine}`
   }
 
-  return `你是运行在浏览器网页端的 Agent。你不能访问服务器文件系统，也不能运行终端命令；你只能通过用户已授权的本地工作目录使用文件工具。
+  return `你是运行在浏览器网页端的 Agent。你不能访问服务器文件系统；你只能通过用户已授权的本地工作目录使用文件工具。若本地 helper 已连接，你还可以在用户审批后调用本地命令行工具。
 
 回答风格:
 - 直接、务实、像资深工程师一样给结论和关键依据。
@@ -118,8 +134,11 @@ function buildAgentInstructions(
 - 需要使用工具时，必须调用已提供的 function tool。
 - 不要输出 <agent_tools> XML 或 agent_tools 代码块。
 - 工具返回后继续分析；任务完成时直接给用户自然语言答复。
+- ${helperStatus ? '本地 helper 已连接，可以按需调用 run_command。' : '本地 helper 未连接，不要调用 run_command。'}
+- 调用 run_command 时必须填写非空 command；cwd 只表示相对工作目录，不是命令。列目录优先用 list_dir；若用户明确要求命令行列目录，Windows 用 dir，macOS/Linux 用 ls -la。
 
-${workspaceLine}`
+${workspaceLine}
+${helperLine}`
 }
 
 function buildAgentPromptCacheKey(
@@ -262,8 +281,10 @@ function assertResponsesToolCallPairs(input: ResponsesInputItem[]): void {
   }
 }
 
-function buildAgentResponsesTools(): ResponsesFunctionTool[] {
-  return [
+function buildAgentResponsesTools(
+  helperStatus: AgentHelperStatus | null
+): ResponsesFunctionTool[] {
+  const tools: ResponsesFunctionTool[] = [
     {
       type: 'function',
       name: 'list_dir',
@@ -366,6 +387,34 @@ function buildAgentResponsesTools(): ResponsesFunctionTool[] {
       },
     },
   ]
+
+  if (helperStatus) {
+    tools.push({
+      type: 'function',
+      name: 'run_command',
+      description:
+        '通过用户本机的 Xingkong Agent Helper 执行终端命令。需要用户审批。只能在 helper 工作目录内运行。',
+      parameters: {
+        type: 'object',
+        properties: {
+          command: {
+            type: 'string',
+            minLength: 1,
+            description: '要执行的命令，例如 dir、ls -la、npm test。不能为空。',
+          },
+          cwd: { type: 'string', description: '相对 helper 工作目录的路径，默认为 .' },
+          timeoutMs: {
+            type: 'integer',
+            description: '超时时间，毫秒。默认 120000，最大 300000。',
+          },
+        },
+        required: ['command'],
+        additionalProperties: false,
+      },
+    })
+  }
+
+  return tools
 }
 
 function buildAgentResponsesPayload(
@@ -373,7 +422,8 @@ function buildAgentResponsesPayload(
   config: PlaygroundConfig,
   parameterEnabled: ParameterEnabled,
   workspaceName: string,
-  conversationId: string | null
+  conversationId: string | null,
+  helperStatus: AgentHelperStatus | null
 ): ResponsesRequest {
   const input = sanitizeResponsesInputItems(messagesToResponsesInput(messages))
   assertResponsesToolCallPairs(input)
@@ -382,11 +432,11 @@ function buildAgentResponsesPayload(
     model: config.model,
     group: config.group,
     input,
-    instructions: buildAgentInstructions(workspaceName, true),
+    instructions: buildAgentInstructions(workspaceName, true, helperStatus),
     stream: true,
     store: false,
     prompt_cache_key: buildAgentPromptCacheKey(conversationId),
-    tools: buildAgentResponsesTools(),
+    tools: buildAgentResponsesTools(helperStatus),
     tool_choice: 'auto',
     parallel_tool_calls: true,
   }
@@ -1121,6 +1171,8 @@ export function Playground() {
   const [workspaceHandles, setWorkspaceHandles] = useState<
     Record<string, FileSystemDirectoryHandle>
   >({})
+  const [agentHelperStatus, setAgentHelperStatus] =
+    useState<AgentHelperStatus | null>(null)
   const [isAgentRunning, setIsAgentRunning] = useState(false)
   const pendingAgentApprovalsRef = useRef<
     Map<string, (approved: boolean) => void>
@@ -1145,6 +1197,23 @@ export function Playground() {
     onMessageUpdate: updateMessages,
   })
   const isBusy = isGenerating || isAgentRunning
+
+  useEffect(() => {
+    if (!isAgentMode) return
+
+    let cancelled = false
+    const refresh = async () => {
+      const status = await checkAgentHelperStatus()
+      if (!cancelled) setAgentHelperStatus(status)
+    }
+
+    void refresh()
+    const timer = window.setInterval(refresh, 10000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [isAgentMode])
 
   // Edit dialog state
   const [editingMessageKey, setEditingMessageKey] = useState<string | null>(
@@ -1530,7 +1599,8 @@ export function Playground() {
               { ...config, stream: true },
               parameterEnabled,
               workspace.name,
-              conversationId
+              conversationId,
+              agentHelperStatus
             )
             if (payload.input.length === 0) {
               throw new Error('responses_input_empty')
@@ -1546,7 +1616,10 @@ export function Playground() {
             nativeOutputItems = result.nativeOutputItems
           } else {
             const payload = buildChatCompletionPayload(
-              [createAgentSystemMessage(workspace.name), ...workingMessages],
+              [
+                createAgentSystemMessage(workspace.name, agentHelperStatus),
+                ...workingMessages,
+              ],
               { ...config, stream: true },
               parameterEnabled,
               {
@@ -1658,6 +1731,7 @@ export function Playground() {
     [
       config,
       executeToolCallsWithApproval,
+      agentHelperStatus,
       parameterEnabled,
       t,
       updateMessages,
@@ -1820,6 +1894,27 @@ export function Playground() {
                         name: workspaceName || activeWorkspaceHandle.name,
                       })
                     : t('No workspace selected')}
+                </span>
+                <span
+                  className={cn(
+                    'rounded-full border px-2 py-1 text-xs',
+                    agentHelperStatus
+                      ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                      : 'border-muted-foreground/20 text-muted-foreground'
+                  )}
+                  title={
+                    agentHelperStatus
+                      ? agentHelperStatus.workspace_warning
+                        ? `${agentHelperStatus.workspace}\n${agentHelperStatus.workspace_warning}`
+                        : agentHelperStatus.workspace
+                      : t('Start local helper to enable terminal tools')
+                  }
+                >
+                  {agentHelperStatus?.workspace_warning
+                    ? t('Helper workspace warning')
+                    : agentHelperStatus
+                      ? t('Helper connected')
+                      : t('Helper offline')}
                 </span>
                 <Button
                   disabled={isBusy}
