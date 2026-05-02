@@ -75,9 +75,39 @@ export function loadConversationState(): {
       return { conversations: [], activeConversationId: null }
     }
 
-    const conversations = JSON.parse(
-      savedConversations
-    ) as ImagePlaygroundConversation[]
+    const conversations = (
+      JSON.parse(savedConversations) as ImagePlaygroundConversation[]
+    ).map((conversation) => ({
+      ...conversation,
+      messages: Array.isArray(conversation.messages)
+        ? conversation.messages.map((message) => {
+            if (
+              message.from === 'assistant' &&
+              message.status === 'loading' &&
+              message.images?.length
+            ) {
+              return {
+                ...message,
+                status: 'complete' as const,
+                errorMessage: undefined,
+              }
+            }
+            if (
+              message.from === 'assistant' &&
+              message.status === 'loading' &&
+              !message.taskId
+            ) {
+              return {
+                ...message,
+                status: 'error' as const,
+                errorMessage:
+                  'Image generation was interrupted before a task was created. Please submit again.',
+              }
+            }
+            return message
+          })
+        : [],
+    }))
 
     return {
       conversations,

@@ -23,7 +23,6 @@ import type { ImagePlaygroundConversation } from '../types'
 interface ImagePlaygroundHistorySidebarProps {
   conversations: ImagePlaygroundConversation[]
   activeConversationId: string
-  isGenerating?: boolean
   onCreateConversation: () => void
   onSelectConversation: (conversationId: string) => void
   onDeleteConversation: (conversationId: string) => void
@@ -32,7 +31,6 @@ interface ImagePlaygroundHistorySidebarProps {
 function ConversationList({
   conversations,
   activeConversationId,
-  isGenerating = false,
   onCreateConversation,
   onSelectConversation,
   onDeleteConversation,
@@ -51,7 +49,6 @@ function ConversationList({
         </div>
         <Button
           className='size-8 rounded-full'
-          disabled={isGenerating}
           onClick={onCreateConversation}
           size='icon'
           variant='outline'
@@ -89,7 +86,6 @@ function ConversationList({
                 <div className='flex items-center justify-between gap-2'>
                   <button
                     className='min-w-0 flex-1 overflow-hidden text-left'
-                    disabled={isGenerating}
                     onClick={() => onSelectConversation(conversation.id)}
                     type='button'
                   >
@@ -102,7 +98,7 @@ function ConversationList({
 
                   <Button
                     className='size-7 shrink-0 rounded-full opacity-70 hover:opacity-100'
-                    disabled={isGenerating || conversations.length <= 1}
+                    disabled={conversations.length <= 1}
                     onClick={(event) => {
                       event.stopPropagation()
                       onDeleteConversation(conversation.id)

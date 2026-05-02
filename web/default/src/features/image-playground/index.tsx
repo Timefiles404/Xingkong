@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { nanoid } from 'nanoid'
 import { toast } from 'sonner'
@@ -220,7 +220,7 @@ export function ImagePlayground() {
   const [config, setConfig] = useState<ImagePlaygroundConfig>(() => loadConfig())
   const [models, setModels] = useState<ModelOption[]>([])
   const [groups, setGroups] = useState<GroupOption[]>([])
-  const [isGenerating, setIsGenerating] = useState(false)
+  const inFlightTaskIdsRef = useRef<Set<string>>(new Set())
   const [conversationState, setConversationState] = useState(() => {
     const loaded = loadConversationState()
     if (loaded.conversations.length > 0 && loaded.activeConversationId) {
@@ -254,18 +254,17 @@ export function ImagePlayground() {
     []
   )
 
-  const updateMessages = useCallback(
+  const updateConversationMessages = useCallback(
     (
+      conversationId: string,
       updater:
         | ImagePlaygroundMessage[]
         | ((prev: ImagePlaygroundMessage[]) => ImagePlaygroundMessage[])
     ) => {
       setConversationState((prevState) => {
-        const currentId =
-          prevState.activeConversationId || prevState.conversations[0]?.id || null
         const now = Date.now()
         const nextConversations = prevState.conversations.map((conversation) => {
-          if (conversation.id !== currentId) return conversation
+          if (conversation.id !== conversationId) return conversation
 
           const newMessages =
             typeof updater === 'function'
@@ -280,7 +279,10 @@ export function ImagePlayground() {
           }
         })
 
-        return persistConversationState(nextConversations, currentId)
+        return persistConversationState(
+          nextConversations,
+          prevState.activeConversationId
+        )
       })
     },
     [persistConversationState]
@@ -424,6 +426,10 @@ export function ImagePlayground() {
     () => Boolean(config.model && config.group),
     [config.group, config.model]
   )
+  const activeConversationIsGenerating = useMemo(
+    () => messages.some((message) => message.status === 'loading'),
+    [messages]
+  )
 
   const waitForImageTask = useCallback(
     async (taskId: string) => {
@@ -454,13 +460,15 @@ export function ImagePlayground() {
 
   const handleSubmit = useCallback(
     async (prompt: string, attachments: ImagePlaygroundAttachment[]) => {
-      if (!canSubmit || isGenerating) return
+      if (!canSubmit || activeConversationIsGenerating || !activeConversation?.id) {
+        return
+      }
 
+      const conversationId = activeConversation.id
       const userMessage = createUserMessage(prompt, attachments)
       const loadingMessage = createLoadingAssistantMessage()
       const nextMessages = [...messages, userMessage, loadingMessage]
-      updateMessages(nextMessages)
-      setIsGenerating(true)
+      updateConversationMessages(conversationId, nextMessages)
       let submittedTaskId: string | null = null
 
       try {
@@ -487,8 +495,9 @@ export function ImagePlayground() {
                 response_format: 'b64_json',
               })
         submittedTaskId = task.id
+        inFlightTaskIdsRef.current.add(task.id)
 
-        updateMessages((prev) =>
+        updateConversationMessages(conversationId, (prev) =>
           prev.map((message) =>
             message.key === loadingMessage.key
               ? {
@@ -502,7 +511,7 @@ export function ImagePlayground() {
       } catch (error: unknown) {
         const { summary, details } = formatImageGenerationError(error)
         toast.error(summary)
-        updateMessages((prev) =>
+        updateConversationMessages(conversationId, (prev) =>
           prev.map((message) =>
             message.key === loadingMessage.key ||
             (submittedTaskId && message.taskId === submittedTaskId)
@@ -515,51 +524,53 @@ export function ImagePlayground() {
           )
         )
       } finally {
-        setIsGenerating(false)
+        if (submittedTaskId) {
+          inFlightTaskIdsRef.current.delete(submittedTaskId)
+        }
       }
     },
     [
+      activeConversation?.id,
+      activeConversationIsGenerating,
       canSubmit,
       config.group,
       config.model,
-      isGenerating,
       messages,
-      updateMessages,
+      updateConversationMessages,
       waitForImageTask,
     ]
   )
 
   useEffect(() => {
-    const pendingTaskIds = conversations.flatMap((conversation) =>
-      conversation.messages
-        .filter((message) => message.status === 'loading' && message.taskId)
-        .map((message) => message.taskId as string)
-    )
-    if (pendingTaskIds.length === 0 || isGenerating) return
+    const pendingTaskIds = Array.from(
+      new Set(
+        conversations.flatMap((conversation) =>
+          conversation.messages
+            .filter((message) => message.status === 'loading' && message.taskId)
+            .map((message) => message.taskId as string)
+        )
+      )
+    ).filter((taskId) => !inFlightTaskIdsRef.current.has(taskId))
 
-    let cancelled = false
-    setIsGenerating(true)
-    Promise.allSettled(
-      pendingTaskIds.map(async (taskId) => {
+    if (pendingTaskIds.length === 0) return
+
+    pendingTaskIds.forEach((taskId) => {
+      inFlightTaskIdsRef.current.add(taskId)
+      void (async () => {
         try {
           await waitForImageTask(taskId)
         } catch (error) {
-          if (cancelled) return
           const { details } = formatImageGenerationError(error)
           updateTaskMessage(taskId, {
             status: 'error',
             errorMessage: details,
           })
+        } finally {
+          inFlightTaskIdsRef.current.delete(taskId)
         }
-      })
-    ).finally(() => {
-      if (!cancelled) setIsGenerating(false)
+      })()
     })
-
-    return () => {
-      cancelled = true
-    }
-  }, [conversations, isGenerating, updateTaskMessage, waitForImageTask])
+  }, [conversations, updateTaskMessage, waitForImageTask])
 
   return (
     <div className='relative flex size-full flex-col overflow-hidden'>
@@ -567,7 +578,6 @@ export function ImagePlayground() {
         <ImagePlaygroundHistorySidebar
           activeConversationId={activeConversationId}
           conversations={conversations}
-          isGenerating={isGenerating}
           onCreateConversation={createNewConversation}
           onDeleteConversation={deleteConversation}
           onSelectConversation={switchConversation}
@@ -580,10 +590,10 @@ export function ImagePlayground() {
 
       <div className='mx-auto w-full max-w-5xl'>
         <ImagePlaygroundInput
-          disabled={isGenerating}
+          disabled={activeConversationIsGenerating}
           groupValue={config.group}
           groups={groups}
-          isGenerating={isGenerating}
+          isGenerating={activeConversationIsGenerating}
           modelValue={config.model}
           models={models}
           onGroupChange={(value) => updateConfig('group', value)}
