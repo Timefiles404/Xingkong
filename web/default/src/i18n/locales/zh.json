@@ -4238,6 +4238,7 @@
     "Downloading helper": "正在下载 Helper",
     "Helper downloaded to workspace: {{fileName}}": "Helper 已下载到工作目录：{{fileName}}",
     "If helper is not started, run it once from the selected folder": "如果 Helper 仍未启动，请在已选择的文件夹里手动运行一次",
+    "If helper is not started, run it from the selected folder. Protocol launch requires --install-protocol.": "如果 Helper 仍未启动，请在已选择的文件夹里手动运行；协议拉起需要使用 --install-protocol 显式安装。",
     "Failed to download helper": "下载 Helper 失败",
     "{{error}}，正在重连（{{attempt}}/{{max}}）...": "{{error}}，正在重连（{{attempt}}/{{max}}）...",
     "Generation was interrupted": "生成已停止"

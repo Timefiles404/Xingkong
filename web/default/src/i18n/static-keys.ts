@@ -501,6 +501,7 @@ export const STATIC_I18N_KEYS = [
   'Downloading helper',
   'Helper downloaded to workspace: {{fileName}}',
   'If helper is not started, run it once from the selected folder',
+  'If helper is not started, run it from the selected folder. Protocol launch requires --install-protocol.',
   'Failed to download helper',
   '{{error}}，正在重连（{{attempt}}/{{max}}）...',
   'Generation was interrupted',

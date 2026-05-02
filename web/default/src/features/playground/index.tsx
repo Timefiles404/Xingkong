@@ -1310,7 +1310,11 @@ export function Playground() {
     const target = getAgentHelperDownloadTarget()
     setIsHelperDownloading(true)
     try {
-      const fileName = await downloadAgentHelperToWorkspace(workspace, target)
+      const fileName = await downloadAgentHelperToWorkspace(
+        workspace,
+        target,
+        getCommonHeaders()
+      )
       toast.success(
         t('Helper downloaded to workspace: {{fileName}}', { fileName })
       )
@@ -1319,7 +1323,11 @@ export function Playground() {
         const status = await checkAgentHelperStatus(2500)
         setAgentHelperStatus(status)
         if (!status) {
-          toast.info(t('If helper is not started, run it once from the selected folder'))
+          toast.info(
+            t(
+              'If helper is not started, run it from the selected folder. Protocol launch requires --install-protocol.'
+            )
+          )
         }
       }, 2000)
     } catch (error) {

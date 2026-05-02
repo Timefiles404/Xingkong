@@ -213,9 +213,13 @@ export function getAgentHelperDownloadTarget(): AgentHelperDownloadTarget {
 
 export async function downloadAgentHelperToWorkspace(
   root: FileSystemDirectoryHandle,
-  helper: AgentHelperDownloadTarget
+  helper: AgentHelperDownloadTarget,
+  headers: Record<string, string> = {}
 ): Promise<string> {
-  const response = await fetch(`/api/helper/download/${helper.target}`)
+  const response = await fetch(`/api/helper/download/${helper.target}`, {
+    credentials: 'include',
+    headers,
+  })
   if (!response.ok) {
     throw new Error(`helper_download_http_${response.status}`)
   }
