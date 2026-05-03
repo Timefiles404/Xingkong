@@ -1,4 +1,5 @@
-import type { AgentHelperStatus, AgentToolCall } from './agent-tools'
+import type { AgentToolCall } from './agent-tools'
+import type { AgentHelperStatus } from './agent-helper'
 import type { Message } from '../types'
 import { AGENT_SYSTEM_PROMPT } from './agent-tools'
 import {

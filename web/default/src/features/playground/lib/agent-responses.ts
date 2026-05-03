@@ -16,11 +16,8 @@ import type {
   ResponsesStreamEvent,
 } from '../types'
 import { getCommonHeaders } from '@/lib/api'
-import type {
-  AgentHelperStatus,
-  AgentToolCall,
-  AgentToolName,
-} from './agent-tools'
+import type { AgentHelperStatus } from './agent-helper'
+import type { AgentToolCall, AgentToolName } from './agent-tools'
 import { getVisibleAgentContent } from './agent-tools'
 import {
   buildAgentInstructions,
