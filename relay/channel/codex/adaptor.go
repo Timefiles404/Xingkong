@@ -118,6 +118,9 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 }
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
+	if _, err := ensureSelectedCodexAccount(c, info); err != nil {
+		return nil, err
+	}
 	resp, err := channel.DoApiRequest(a, c, info, requestBody)
 	if err != nil {
 		if accountID := c.GetInt("codex_account_id"); accountID > 0 && shouldCooldownCodexAccountForLocalError(err) {
@@ -183,15 +186,12 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *rel
 	channel.SetupApiRequestHeader(info, c, req)
 
 	key := strings.TrimSpace(info.ApiKey)
-	selectedAccountID := 0
 	if key == constant.CodexPoolKeyMarker {
-		account, err := model.SelectCodexAccountForRelay(codexSessionKeyFromContext(c), codexRequestedModel(c, info))
+		account, err := ensureSelectedCodexAccount(c, info)
 		if err != nil {
 			return err
 		}
 		key = strings.TrimSpace(account.Credential)
-		selectedAccountID = account.Id
-		c.Set("codex_account_id", selectedAccountID)
 	}
 	if !strings.HasPrefix(key, "{") {
 		return errors.New("codex channel: key must be a JSON object")
@@ -232,6 +232,34 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *rel
 		req.Set("Accept", "application/json")
 	}
 	return nil
+}
+
+func ensureSelectedCodexAccount(c *gin.Context, info *relaycommon.RelayInfo) (*model.CodexAccount, error) {
+	if info == nil || strings.TrimSpace(info.ApiKey) != constant.CodexPoolKeyMarker {
+		return nil, nil
+	}
+	if c != nil {
+		if selected, ok := c.Get("codex_selected_account"); ok {
+			if account, ok := selected.(*model.CodexAccount); ok && account != nil {
+				return account, nil
+			}
+		}
+	}
+	account, err := model.SelectCodexAccountForRelay(codexSessionKeyFromContext(c), codexRequestedModel(c, info))
+	if err != nil {
+		return nil, err
+	}
+	if baseURL := strings.TrimSpace(account.BaseURL); baseURL != "" {
+		info.ChannelBaseUrl = baseURL
+	}
+	if proxy := strings.TrimSpace(account.Proxy); proxy != "" {
+		info.ChannelSetting.Proxy = proxy
+	}
+	if c != nil {
+		c.Set("codex_account_id", account.Id)
+		c.Set("codex_selected_account", account)
+	}
+	return account, nil
 }
 
 func codexRequestedModel(c *gin.Context, info *relaycommon.RelayInfo) string {

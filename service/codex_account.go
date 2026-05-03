@@ -131,22 +131,23 @@ func collectCodexCredentials(v any, out *[]model.CodexOAuthCredential) {
 }
 
 func mapToCodexCredential(m map[string]any) (model.CodexOAuthCredential, bool) {
+	source := flattenCodexCredentialMap(m)
 	cred := model.CodexOAuthCredential{
-		IDToken:      stringFromAny(m["id_token"]),
-		AccessToken:  stringFromAny(m["access_token"]),
-		RefreshToken: stringFromAny(m["refresh_token"]),
-		AccountID:    stringFromAny(m["account_id"]),
-		LastRefresh:  stringFromAny(m["last_refresh"]),
-		Email:        stringFromAny(m["email"]),
-		Type:         stringFromAny(m["type"]),
-		Expired:      stringFromAny(m["expired"]),
-		Priority:     intFromAny(m["priority"]),
-		Note:         firstNonEmptyString(m["note"], m["remark"], m["remarks"]),
-		ProxyURL:     firstNonEmptyString(m["proxy_url"], m["proxy"], m["proxyURL"]),
+		IDToken:      stringFromAny(source["id_token"]),
+		AccessToken:  stringFromAny(source["access_token"]),
+		RefreshToken: stringFromAny(source["refresh_token"]),
+		AccountID:    stringFromAny(source["account_id"]),
+		LastRefresh:  stringFromAny(source["last_refresh"]),
+		Email:        stringFromAny(source["email"]),
+		Type:         stringFromAny(source["type"]),
+		Expired:      firstNonEmptyString(source["expired"], source["expire"], source["expires_at"]),
+		Priority:     intFromAny(source["priority"]),
+		Note:         firstNonEmptyString(source["note"], source["remark"], source["remarks"]),
+		ProxyURL:     firstNonEmptyString(source["proxy_url"], source["proxy"], source["proxyURL"]),
 	}
-	if disabled, ok := boolFromAny(m["disabled"]); ok {
+	if disabled, ok := boolFromAny(source["disabled"]); ok {
 		cred.Disabled = &disabled
-	} else if disabled, ok := boolFromAny(m["is_disabled"]); ok {
+	} else if disabled, ok := boolFromAny(source["is_disabled"]); ok {
 		cred.Disabled = &disabled
 	}
 	if cred.AccessToken == "" || cred.RefreshToken == "" {
@@ -176,6 +177,23 @@ func mapToCodexCredential(m map[string]any) (model.CodexOAuthCredential, bool) {
 		cred.Type = "codex"
 	}
 	return cred, true
+}
+
+func flattenCodexCredentialMap(m map[string]any) map[string]any {
+	out := make(map[string]any, len(m)+8)
+	for k, v := range m {
+		out[k] = v
+	}
+	for _, key := range []string{"token_data", "credential", "credentials", "auth"} {
+		if nested, ok := m[key].(map[string]any); ok {
+			for k, v := range nested {
+				if _, exists := out[k]; !exists {
+					out[k] = v
+				}
+			}
+		}
+	}
+	return out
 }
 
 func firstNonEmptyString(values ...any) string {

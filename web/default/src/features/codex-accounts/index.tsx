@@ -16,9 +16,11 @@ import { Card, CardContent } from '@/components/ui/card'
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DialogTrigger,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -79,6 +81,9 @@ export function CodexAccounts() {
   const [editNote, setEditNote] = useState('')
   const [importRaw, setImportRaw] = useState('')
   const [busyId, setBusyId] = useState<number | null>(null)
+  const [oauthBusy, setOAuthBusy] = useState(false)
+  const [importBusy, setImportBusy] = useState(false)
+  const [exportBusy, setExportBusy] = useState(false)
   const enabledCount = useMemo(
     () => accounts.filter((item) => item.status === 1).length,
     [accounts]
@@ -102,58 +107,86 @@ export function CodexAccounts() {
   }, [])
 
   const handleStartOAuth = async () => {
-    const res = await startCodexAccountOAuth()
-    if (!res.success || !res.data?.authorize_url) {
-      toast.error(res.message || '无法创建授权链接')
-      return
+    setOAuthBusy(true)
+    try {
+      const res = await startCodexAccountOAuth()
+      if (!res.success || !res.data?.authorize_url) {
+        toast.error(res.message || '无法创建授权链接')
+        return
+      }
+      setAuthUrl(res.data.authorize_url)
+      window.open(res.data.authorize_url, '_blank', 'noopener,noreferrer')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '无法创建授权链接')
+    } finally {
+      setOAuthBusy(false)
     }
-    setAuthUrl(res.data.authorize_url)
-    window.open(res.data.authorize_url, '_blank', 'noopener,noreferrer')
   }
 
   const handleCompleteOAuth = async () => {
-    const res = await completeCodexAccountOAuth({
-      input: callbackUrl,
-      name: accountName,
-      base_url: baseUrl,
-      proxy,
-    })
-    if (!res.success) {
-      toast.error(res.message || '保存失败')
-      return
+    setOAuthBusy(true)
+    try {
+      const res = await completeCodexAccountOAuth({
+        input: callbackUrl,
+        name: accountName,
+        base_url: baseUrl,
+        proxy,
+      })
+      if (!res.success) {
+        toast.error(res.message || '保存失败')
+        return
+      }
+      toast.success('Codex 账号已保存')
+      setOAuthOpen(false)
+      setCallbackUrl('')
+      setAccountName('')
+      await load()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '保存失败')
+    } finally {
+      setOAuthBusy(false)
     }
-    toast.success('Codex 账号已保存')
-    setOAuthOpen(false)
-    setCallbackUrl('')
-    setAccountName('')
-    await load()
   }
 
   const handleImport = async () => {
-    const res = await importCodexAccounts({
-      raw: importRaw,
-      base_url: baseUrl,
-      proxy,
-    })
-    if (!res.success) {
-      toast.error(res.message || '导入失败')
-      return
+    setImportBusy(true)
+    try {
+      const res = await importCodexAccounts({
+        raw: importRaw,
+        base_url: baseUrl,
+        proxy,
+      })
+      if (!res.success) {
+        toast.error(res.message || '导入失败')
+        return
+      }
+      toast.success(`已导入 ${res.data?.imported || 0}/${res.data?.total || 0} 个账号`)
+      setImportOpen(false)
+      setImportRaw('')
+      await load()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '导入失败')
+    } finally {
+      setImportBusy(false)
     }
-    toast.success(`已导入 ${res.data?.imported || 0}/${res.data?.total || 0} 个账号`)
-    setImportOpen(false)
-    setImportRaw('')
-    await load()
   }
 
   const handleExport = async () => {
-    const res = await exportCodexAccounts()
-    if (!res.success) {
-      toast.error('导出失败')
-      return
+    setExportBusy(true)
+    try {
+      const res = await exportCodexAccounts()
+      if (!res.success) {
+        toast.error('导出失败')
+        return
+      }
+      const text = JSON.stringify(res.data || [], null, 2)
+      await navigator.clipboard.writeText(text)
+      toast.success('账号 JSON 已复制到剪贴板')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '导出失败')
+    } finally {
+      setExportBusy(false)
     }
-    const text = JSON.stringify(res.data || [], null, 2)
-    await navigator.clipboard.writeText(text)
-    toast.success('账号 JSON 已复制到剪贴板')
   }
 
   const handleRefresh = async (id: number) => {
@@ -232,18 +265,117 @@ export function CodexAccounts() {
         管理 Codex 官方号池。前台只暴露一个 Codex 官方渠道，实际账号按会话亲和、优先级和冷却状态选择。
       </SectionPageLayout.Description>
       <SectionPageLayout.Actions>
-        <Button variant='outline' onClick={handleExport}>
-          <Download className='mr-2 h-4 w-4' />
+        <Button variant='outline' onClick={handleExport} disabled={exportBusy}>
+          {exportBusy ? (
+            <Loader2 className='mr-2 h-4 w-4 animate-spin' />
+          ) : (
+            <Download className='mr-2 h-4 w-4' />
+          )}
           导出账号
         </Button>
-        <Button variant='outline' onClick={() => setImportOpen(true)}>
-          <Upload className='mr-2 h-4 w-4' />
-          导入 CPA 账号
-        </Button>
-        <Button onClick={() => setOAuthOpen(true)}>
-          <ExternalLink className='mr-2 h-4 w-4' />
-          添加 OAuth 账号
-        </Button>
+        <Dialog open={importOpen} onOpenChange={setImportOpen}>
+          <DialogTrigger asChild>
+            <Button variant='outline' type='button'>
+              <Upload className='mr-2 h-4 w-4' />
+              导入 CPA 账号
+            </Button>
+          </DialogTrigger>
+          <DialogContent className='sm:max-w-3xl'>
+            <DialogHeader>
+              <DialogTitle>导入 CLIProxyAPI 账号</DialogTitle>
+              <DialogDescription>
+                粘贴 CPA 导出的 Codex JSON。支持单个对象、数组、或包含 auths/accounts
+                的对象。
+              </DialogDescription>
+            </DialogHeader>
+            <Textarea
+              className='min-h-[320px] font-mono text-xs'
+              value={importRaw}
+              onChange={(e) => setImportRaw(e.target.value)}
+              placeholder='粘贴 CPA 导出的 Codex JSON'
+            />
+            <div className='grid gap-3 sm:grid-cols-2'>
+              <div className='space-y-2'>
+                <Label>默认 Base URL</Label>
+                <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
+              </div>
+              <div className='space-y-2'>
+                <Label>默认代理 URL（可选）</Label>
+                <Input
+                  value={proxy}
+                  onChange={(e) => setProxy(e.target.value)}
+                  placeholder='为空时使用账号 JSON 内的 proxy_url'
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button
+                variant='outline'
+                onClick={() => setImportOpen(false)}
+                disabled={importBusy}
+              >
+                取消
+              </Button>
+              <Button onClick={handleImport} disabled={!importRaw.trim() || importBusy}>
+                {importBusy && <Loader2 className='mr-2 h-4 w-4 animate-spin' />}
+                导入
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+        <Dialog open={oauthOpen} onOpenChange={setOAuthOpen}>
+          <DialogTrigger asChild>
+            <Button type='button'>
+              <ExternalLink className='mr-2 h-4 w-4' />
+              添加 OAuth 账号
+            </Button>
+          </DialogTrigger>
+          <DialogContent className='sm:max-w-2xl'>
+            <DialogHeader>
+              <DialogTitle>添加 Codex OAuth 账号</DialogTitle>
+              <DialogDescription>
+                先打开授权页面，登录完成后把完整回调 URL 粘贴回来保存。
+              </DialogDescription>
+            </DialogHeader>
+            <div className='space-y-3'>
+              <Label>账号备注</Label>
+              <Input value={accountName} onChange={(e) => setAccountName(e.target.value)} />
+              <Label>Base URL</Label>
+              <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
+              <Label>代理 URL（可选）</Label>
+              <Input value={proxy} onChange={(e) => setProxy(e.target.value)} />
+              <Button variant='outline' onClick={handleStartOAuth} disabled={oauthBusy}>
+                {oauthBusy && <Loader2 className='mr-2 h-4 w-4 animate-spin' />}
+                打开授权页面
+              </Button>
+              {authUrl && (
+                <div className='text-muted-foreground break-all text-xs'>{authUrl}</div>
+              )}
+              <Label>授权完成后的完整回调 URL</Label>
+              <Input
+                value={callbackUrl}
+                onChange={(e) => setCallbackUrl(e.target.value)}
+                placeholder='http://localhost:1455/auth/callback?code=...&state=...'
+              />
+            </div>
+            <DialogFooter>
+              <Button
+                variant='outline'
+                onClick={() => setOAuthOpen(false)}
+                disabled={oauthBusy}
+              >
+                取消
+              </Button>
+              <Button
+                onClick={handleCompleteOAuth}
+                disabled={!callbackUrl.trim() || oauthBusy}
+              >
+                {oauthBusy && <Loader2 className='mr-2 h-4 w-4 animate-spin' />}
+                保存账号
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </SectionPageLayout.Actions>
       <SectionPageLayout.Content>
         <Card>
@@ -366,42 +498,6 @@ export function CodexAccounts() {
         </Card>
       </SectionPageLayout.Content>
 
-      <Dialog open={oauthOpen} onOpenChange={setOAuthOpen}>
-        <DialogContent className='sm:max-w-2xl'>
-          <DialogHeader>
-            <DialogTitle>添加 Codex OAuth 账号</DialogTitle>
-          </DialogHeader>
-          <div className='space-y-3'>
-            <Label>账号备注</Label>
-            <Input value={accountName} onChange={(e) => setAccountName(e.target.value)} />
-            <Label>Base URL</Label>
-            <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
-            <Label>代理 URL（可选）</Label>
-            <Input value={proxy} onChange={(e) => setProxy(e.target.value)} />
-            <Button variant='outline' onClick={handleStartOAuth}>
-              打开授权页面
-            </Button>
-            {authUrl && (
-              <div className='text-muted-foreground break-all text-xs'>{authUrl}</div>
-            )}
-            <Label>授权完成后的完整回调 URL</Label>
-            <Input
-              value={callbackUrl}
-              onChange={(e) => setCallbackUrl(e.target.value)}
-              placeholder='http://localhost:1455/auth/callback?code=...&state=...'
-            />
-          </div>
-          <DialogFooter>
-            <Button variant='outline' onClick={() => setOAuthOpen(false)}>
-              取消
-            </Button>
-            <Button onClick={handleCompleteOAuth} disabled={!callbackUrl.trim()}>
-              保存账号
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent className='sm:max-w-2xl'>
           <DialogHeader>
@@ -432,28 +528,6 @@ export function CodexAccounts() {
               取消
             </Button>
             <Button onClick={saveEdit}>保存</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={importOpen} onOpenChange={setImportOpen}>
-        <DialogContent className='sm:max-w-3xl'>
-          <DialogHeader>
-            <DialogTitle>导入 CLIProxyAPI 账号</DialogTitle>
-          </DialogHeader>
-          <Textarea
-            className='min-h-[320px] font-mono text-xs'
-            value={importRaw}
-            onChange={(e) => setImportRaw(e.target.value)}
-            placeholder='粘贴 CPA 导出的 Codex JSON，可为单个对象、数组或包含 auths 的对象'
-          />
-          <DialogFooter>
-            <Button variant='outline' onClick={() => setImportOpen(false)}>
-              取消
-            </Button>
-            <Button onClick={handleImport} disabled={!importRaw.trim()}>
-              导入
-            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
