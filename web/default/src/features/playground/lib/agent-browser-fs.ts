@@ -1,5 +1,5 @@
 import type { WorkspaceEntry } from './agent-helper'
-import type { AgentBatchEdit } from './agent-tools'
+import type { AgentBatchEdit } from './agent-tool-types'
 
 type BrowserFileSystemDirectoryHandle = FileSystemDirectoryHandle & {
   entries?: () => AsyncIterableIterator<[string, FileSystemHandle]>

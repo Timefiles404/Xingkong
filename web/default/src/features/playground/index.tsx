@@ -22,7 +22,11 @@ import { PlaygroundChat } from './components/playground-chat'
 import { PlaygroundInput } from './components/playground-input'
 import { PlaygroundModeToolbar } from './components/playground-mode-toolbar'
 import { DEFAULT_GROUP } from './constants'
-import { usePlaygroundState, useChatHandler } from './hooks'
+import {
+  useAgentHelperHistory,
+  usePlaygroundState,
+  useChatHandler,
+} from './hooks'
 import {
   buildModelVisibleAgentMessages,
   buildAgentPromptCacheKey,
@@ -51,14 +55,12 @@ import {
   isOpenAIReasoningModel,
   isFileSystemAccessSupported,
   isWorkspaceMutatingToolCall,
-  loadHelperAgentConversations,
   launchAgentHelperProtocol,
   pairAgentHelper,
   parseAgentToolCalls,
   requestAgentContextSummaryModel,
   requestWorkspaceDirectory,
   requiresAgentToolApproval,
-  saveHelperAgentConversations,
   stripAgentToolBlocks,
   shouldUseOpenAICompatibleMode,
   streamAgentCompletion,
@@ -82,10 +84,6 @@ import type {
 } from './types'
 
 const MAX_AGENT_STEPS = 30
-
-function isUnsupportedHelperHistoryError(error: unknown): boolean {
-  return error instanceof Error && /unsupported_fs_op/i.test(error.message)
-}
 
 function hasAgentToolSyntax(content: string): boolean {
   return /<agent_tools\b/i.test(content) || /```agent_tools/i.test(content)
@@ -130,9 +128,6 @@ export function Playground() {
   const [helperManualCommand, setHelperManualCommand] = useState('')
   const [workspaceRefreshKey, setWorkspaceRefreshKey] = useState(0)
   const [isAgentSettingsOpen, setIsAgentSettingsOpen] = useState(false)
-  const [helperHistoryReady, setHelperHistoryReady] = useState(false)
-  const [helperHistorySupported, setHelperHistorySupported] = useState(true)
-  const lastSavedHelperHistoryRef = useRef('')
   const helperStatusMissesRef = useRef(0)
   const [isAgentRunning, setIsAgentRunning] = useState(false)
   const [isAgentCompacting, setIsAgentCompacting] = useState(false)
@@ -197,112 +192,16 @@ export function Playground() {
     agentSettings.context
   )
 
-  useEffect(() => {
-    if (!isAgentMode || !helperHistoryKey) {
-      setHelperHistoryReady(false)
-      setHelperHistorySupported(true)
-      setConversationPersistenceEnabled(true)
-      return
-    }
-
-    let cancelled = false
-    setConversationPersistenceEnabled(false)
-    setHelperHistoryReady(false)
-    setHelperHistorySupported(true)
-    lastSavedHelperHistoryRef.current = ''
-
-    const load = async () => {
-      try {
-        const state = await loadHelperAgentConversations()
-        if (cancelled) return
-        replaceModeConversations(
-          'agent',
-          state.conversations,
-          state.activeConversationId
-        )
-        if (state.agentSettings) {
-          updateAgentSettings(state.agentSettings)
-        }
-        setHelperHistoryReady(true)
-      } catch (error) {
-        if (cancelled) return
-        if (isUnsupportedHelperHistoryError(error)) {
-          setHelperHistorySupported(false)
-          setConversationPersistenceEnabled(true)
-          toast.error(t('Helper is too old. Please download the latest helper.'))
-          return
-        }
-        toast.error(
-          error instanceof Error
-            ? error.message
-            : t('Failed to load helper conversation history')
-        )
-        setHelperHistoryReady(true)
-      }
-    }
-
-    void load()
-    return () => {
-      cancelled = true
-    }
-  }, [
-    helperHistoryKey,
+  useAgentHelperHistory({
     isAgentMode,
-    replaceModeConversations,
-    setConversationPersistenceEnabled,
-    t,
-    updateAgentSettings,
-  ])
-
-  useEffect(() => {
-    if (!helperHistoryReady || !helperHistoryKey || !helperHistorySupported) return
-    const agentConversations = conversations.filter(
-      (conversation) => (conversation.mode || 'chat') === 'agent'
-    )
-    const activeAgentId = agentConversations.some(
-      (conversation) => conversation.id === activeConversationId
-    )
-      ? activeConversationId
-      : agentConversations[0]?.id || null
-    const serialized = JSON.stringify({
-      conversations: agentConversations,
-      activeConversationId: activeAgentId,
-    })
-    if (serialized === lastSavedHelperHistoryRef.current) return
-
-    const timer = window.setTimeout(() => {
-      lastSavedHelperHistoryRef.current = serialized
-      void saveHelperAgentConversations({
-        conversations: agentConversations,
-        activeConversationId: activeAgentId,
-        agentSettings,
-      }).catch((error) => {
-        lastSavedHelperHistoryRef.current = ''
-        if (isUnsupportedHelperHistoryError(error)) {
-          setHelperHistorySupported(false)
-          setConversationPersistenceEnabled(true)
-          toast.error(t('Helper is too old. Please download the latest helper.'))
-          return
-        }
-        toast.error(
-          error instanceof Error
-            ? error.message
-            : t('Failed to save helper conversation history')
-        )
-      })
-    }, 300)
-
-    return () => window.clearTimeout(timer)
-  }, [
-    activeConversationId,
-    conversations,
     helperHistoryKey,
-    helperHistoryReady,
-    helperHistorySupported,
+    conversations,
+    activeConversationId,
     agentSettings,
+    replaceModeConversations,
+    updateAgentSettings,
     setConversationPersistenceEnabled,
-    t,
-  ])
+  })
 
   const { sendChat, stopGeneration, isGenerating } = useChatHandler({
     config,
