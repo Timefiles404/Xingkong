@@ -1,29 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { CopyIcon, SettingsIcon } from 'lucide-react'
+import { SettingsIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
-import { getCommonHeaders } from '@/lib/api'
 import { getUserModels, getUserGroups } from './api'
 import { PlaygroundHistorySidebar } from './components/playground-history-sidebar'
 import { PlaygroundFileSidebar } from './components/playground-file-sidebar'
 import { PlaygroundAgentSettingsDialog } from './components/playground-agent-settings-dialog'
 import { PlaygroundChat } from './components/playground-chat'
+import { PlaygroundHelperPairDialog } from './components/playground-helper-pair-dialog'
 import { PlaygroundInput } from './components/playground-input'
 import { PlaygroundModeToolbar } from './components/playground-mode-toolbar'
 import { DEFAULT_GROUP } from './constants'
 import {
+  useAgentHelperConnection,
   useAgentHelperHistory,
+  useAgentWorkspace,
   usePlaygroundState,
   useChatHandler,
 } from './hooks'
@@ -32,34 +25,26 @@ import {
   buildAgentPromptCacheKey,
   buildAgentResponsesPayload,
   buildAgentSummaryPrompt,
-  buildAgentHelperManualCommand,
   buildAgentToolReviewResults,
   buildChatCompletionPayload,
   calculateAgentContextUsage,
   prepareAgentContextCompaction,
-  checkAgentHelperStatus,
   createAgentContextEventMessage,
   createAgentSystemMessage,
   createUserMessage,
   createLoadingAssistantMessage,
   chargeExternalRequestFeeOnce,
-  downloadAgentHelperToWorkspace,
   executeAgentToolCalls,
   externalEndpoint,
   finalizeMessage,
   formatAgentToolResults,
   getCompactionSourceCharCount,
-  getAgentHelperDownloadTarget,
   getHelperWorkspaceName,
   isAgentHelperPaired,
   isOpenAIReasoningModel,
-  isFileSystemAccessSupported,
   isWorkspaceMutatingToolCall,
-  launchAgentHelperProtocol,
-  pairAgentHelper,
   parseAgentToolCalls,
   requestAgentContextSummaryModel,
-  requestWorkspaceDirectory,
   requiresAgentToolApproval,
   stripAgentToolBlocks,
   shouldUseOpenAICompatibleMode,
@@ -69,7 +54,6 @@ import {
 } from './lib'
 import type {
   AgentStreamControl,
-  AgentHelperStatus,
   AgentToolRuntime,
   AgentToolCall,
   AgentToolResult,
@@ -116,19 +100,8 @@ export function Playground() {
     replaceModeConversations,
     setConversationPersistenceEnabled,
   } = usePlaygroundState()
-  const [workspaceHandles, setWorkspaceHandles] = useState<
-    Record<string, FileSystemDirectoryHandle>
-  >({})
-  const [agentHelperStatus, setAgentHelperStatus] =
-    useState<AgentHelperStatus | null>(null)
-  const [isHelperDownloading, setIsHelperDownloading] = useState(false)
-  const [isHelperPairing, setIsHelperPairing] = useState(false)
-  const [isHelperPairDialogOpen, setIsHelperPairDialogOpen] = useState(false)
-  const [helperPairCodeInput, setHelperPairCodeInput] = useState('')
-  const [helperManualCommand, setHelperManualCommand] = useState('')
   const [workspaceRefreshKey, setWorkspaceRefreshKey] = useState(0)
   const [isAgentSettingsOpen, setIsAgentSettingsOpen] = useState(false)
-  const helperStatusMissesRef = useRef(0)
   const [isAgentRunning, setIsAgentRunning] = useState(false)
   const [isAgentCompacting, setIsAgentCompacting] = useState(false)
   const pendingAgentApprovalsRef = useRef<
@@ -140,10 +113,36 @@ export function Playground() {
     stopped: false,
   })
 
-  const activeWorkspaceHandle = activeConversationId
-    ? workspaceHandles[activeConversationId]
-    : undefined
   const isAgentMode = mode === 'agent'
+  const {
+    activeWorkspaceHandle,
+    pickWorkspace,
+    ensureWorkspaceForHelper,
+  } = useAgentWorkspace({
+    activeConversationId,
+    updateActiveConversationMeta,
+  })
+
+  const {
+    agentHelperStatus,
+    isHelperDownloading,
+    isHelperPairing,
+    isHelperPairDialogOpen,
+    helperPairCodeInput,
+    helperManualCommand,
+    setIsHelperPairDialogOpen,
+    setHelperPairCodeInput,
+    handleDownloadHelper,
+    handlePairHelper,
+    handleStartHelper,
+    handleCopyManualHelperCommand,
+  } = useAgentHelperConnection({
+    isAgentMode,
+    ensureWorkspaceForHelper,
+    createNewConversation,
+    switchMode,
+  })
+
   const isHelperConnected = isAgentHelperPaired(agentHelperStatus)
   const usableHelperStatus = isHelperConnected ? agentHelperStatus : null
   const helperHistoryKey =
@@ -210,32 +209,6 @@ export function Playground() {
   })
   const isBusy = isGenerating || isAgentRunning || isAgentCompacting
 
-  useEffect(() => {
-    if (!isAgentMode) return
-
-    let cancelled = false
-    const refresh = async () => {
-      const status = await checkAgentHelperStatus()
-      if (cancelled) return
-      if (status) {
-        helperStatusMissesRef.current = 0
-        setAgentHelperStatus(status)
-        return
-      }
-      helperStatusMissesRef.current += 1
-      setAgentHelperStatus((previous) =>
-        previous && helperStatusMissesRef.current < 3 ? previous : null
-      )
-    }
-
-    void refresh()
-    const timer = window.setInterval(refresh, 10000)
-    return () => {
-      cancelled = true
-      window.clearInterval(timer)
-    }
-  }, [isAgentMode])
-
   // Edit dialog state
   const [editingMessageKey, setEditingMessageKey] = useState<string | null>(
     null
@@ -285,176 +258,6 @@ export function Playground() {
       updateConfig('group', processedGroups[0]?.value || DEFAULT_GROUP)
     }
   }, [groupsData, config.group, setGroups, updateConfig])
-
-  const pickWorkspace = useCallback(async () => {
-    if (!isFileSystemAccessSupported()) {
-      toast.error(t('This browser does not support local folder access'))
-      return null
-    }
-
-    if (!activeConversationId) return null
-
-    try {
-      const handle = await requestWorkspaceDirectory()
-      setWorkspaceHandles((prev) => ({
-        ...prev,
-        [activeConversationId]: handle,
-      }))
-      updateActiveConversationMeta({ workspaceName: handle.name })
-      toast.success(t('Workspace selected'))
-      return handle
-    } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') {
-        return null
-      }
-      toast.error(t('Failed to select workspace'))
-      return null
-    }
-  }, [activeConversationId, t, updateActiveConversationMeta])
-
-  const ensureWorkspaceForHelper = useCallback(async () => {
-    let workspace = activeWorkspaceHandle
-    if (!workspace) {
-      workspace = await pickWorkspace()
-    }
-    return workspace || null
-  }, [activeWorkspaceHandle, pickWorkspace])
-
-  const handleDownloadHelper = useCallback(async () => {
-    const workspace = await ensureWorkspaceForHelper()
-    if (!workspace) return
-
-    const target = getAgentHelperDownloadTarget()
-    setIsHelperDownloading(true)
-    try {
-      const fileName = await downloadAgentHelperToWorkspace(
-        workspace,
-        target,
-        getCommonHeaders()
-      )
-      toast.success(
-        t('Helper downloaded to workspace: {{fileName}}', { fileName })
-      )
-      setHelperManualCommand(buildAgentHelperManualCommand(fileName))
-      toast.info(t('Helper downloaded. Start it from the helper menu.'))
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : t('Failed to download helper')
-      )
-    } finally {
-      setIsHelperDownloading(false)
-    }
-  }, [ensureWorkspaceForHelper, t])
-
-  const refreshAgentHelperStatus = useCallback(async () => {
-    const status = await checkAgentHelperStatus(2500)
-    setAgentHelperStatus(status)
-    return status
-  }, [])
-
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search)
-    const pairCode = params.get('xingkong_helper_pair_code')?.trim()
-    const shouldAutoStart = params.get('xingkong_helper_autostart') === '1'
-    const shouldResume = params.get('xingkong_helper_resume') === '1'
-    if (!pairCode || !shouldAutoStart) return
-
-    let cancelled = false
-    const run = async () => {
-      for (let attempt = 0; attempt < 10; attempt += 1) {
-        if (cancelled) return
-        try {
-          await pairAgentHelper(pairCode)
-          const status = await refreshAgentHelperStatus()
-          if (!cancelled && isAgentHelperPaired(status)) {
-            if (shouldResume) {
-              switchMode('agent')
-            } else {
-              createNewConversation('agent', {
-                workspaceName: getHelperWorkspaceName(status),
-              })
-            }
-            toast.success(t('Helper paired'))
-            params.delete('xingkong_helper_pair_code')
-            params.delete('xingkong_helper_autostart')
-            params.delete('xingkong_agent_mode')
-            params.delete('xingkong_helper_resume')
-            const nextQuery = params.toString()
-            window.history.replaceState(
-              null,
-              '',
-              `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ''}`
-            )
-            return
-          }
-        } catch {
-          await new Promise((resolve) => window.setTimeout(resolve, 700))
-        }
-      }
-      if (!cancelled) {
-        setHelperPairCodeInput(pairCode)
-        setIsHelperPairDialogOpen(true)
-        toast.error(t('Failed to pair helper'))
-      }
-    }
-
-    void run()
-    return () => {
-      cancelled = true
-    }
-  }, [createNewConversation, refreshAgentHelperStatus, switchMode, t])
-
-  const handlePairHelper = useCallback(
-    async (code: string) => {
-      if (!code) return
-      setIsHelperPairing(true)
-      try {
-        await pairAgentHelper(code)
-        const status = await refreshAgentHelperStatus()
-        setAgentHelperStatus(status)
-        if (isAgentHelperPaired(status)) {
-          toast.success(t('Helper paired'))
-          setHelperPairCodeInput('')
-          setHelperManualCommand('')
-          setIsHelperPairDialogOpen(false)
-        } else {
-          toast.info(t('Helper is reachable but not paired yet'))
-        }
-      } catch (error) {
-        toast.error(
-          error instanceof Error ? error.message : t('Failed to pair helper')
-        )
-      } finally {
-        setIsHelperPairing(false)
-      }
-    },
-    [refreshAgentHelperStatus, t]
-  )
-
-  const handleStartHelper = useCallback(async () => {
-    const target = getAgentHelperDownloadTarget()
-    setHelperManualCommand(buildAgentHelperManualCommand(target.fileName))
-    launchAgentHelperProtocol()
-
-    window.setTimeout(async () => {
-      const status = await refreshAgentHelperStatus()
-      if (status) {
-        if (isAgentHelperPaired(status)) return
-        setIsHelperPairDialogOpen(true)
-        return
-      }
-      setIsHelperPairDialogOpen(true)
-      toast.info(
-        t('Helper launch failed. Start helper manually and enter the pairing code.')
-      )
-    }, 2000)
-  }, [refreshAgentHelperStatus, t])
-
-  const handleCopyManualHelperCommand = useCallback(async () => {
-    if (!helperManualCommand || !navigator?.clipboard?.writeText) return
-    await navigator.clipboard.writeText(helperManualCommand)
-    toast.success(t('Command copied'))
-  }, [helperManualCommand, t])
 
   const handleModeChange = useCallback(
     (nextMode: PlaygroundMode) => {
@@ -1389,66 +1192,16 @@ export function Playground() {
         builtinModels={models}
       />
 
-      <Dialog
+      <PlaygroundHelperPairDialog
         open={isHelperPairDialogOpen && !isHelperConnected}
         onOpenChange={setIsHelperPairDialogOpen}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{t('Pair local helper')}</DialogTitle>
-            <DialogDescription>
-              {t(
-                'Enter the pairing code printed in the local helper window. The web page never generates this code.'
-              )}
-            </DialogDescription>
-          </DialogHeader>
-          <div className='space-y-3'>
-            <Input
-              autoFocus
-              inputMode='numeric'
-              maxLength={16}
-              onChange={(event) =>
-                setHelperPairCodeInput(event.target.value.replace(/\s+/g, ''))
-              }
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  void handlePairHelper(helperPairCodeInput)
-                }
-              }}
-              placeholder={t('Helper pairing code')}
-              value={helperPairCodeInput}
-            />
-            {helperManualCommand && (
-              <button
-                className='text-muted-foreground flex min-w-0 items-center gap-2 text-left text-xs hover:text-foreground'
-                onClick={() => void handleCopyManualHelperCommand()}
-                type='button'
-              >
-                <CopyIcon className='size-3.5 shrink-0' />
-                <span className='truncate'>
-                  {t('Manual start command')}: {helperManualCommand}
-                </span>
-              </button>
-            )}
-          </div>
-          <DialogFooter>
-            <Button
-              onClick={() => setIsHelperPairDialogOpen(false)}
-              type='button'
-              variant='outline'
-            >
-              {t('Cancel')}
-            </Button>
-            <Button
-              disabled={isHelperPairing || !helperPairCodeInput.trim()}
-              onClick={() => void handlePairHelper(helperPairCodeInput)}
-              type='button'
-            >
-              {isHelperPairing ? t('Pairing helper') : t('Pair helper')}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        code={helperPairCodeInput}
+        manualCommand={helperManualCommand}
+        isPairing={isHelperPairing}
+        onCodeChange={setHelperPairCodeInput}
+        onPair={(code) => void handlePairHelper(code)}
+        onCopyManualCommand={() => void handleCopyManualHelperCommand()}
+      />
     </div>
   )
 }
