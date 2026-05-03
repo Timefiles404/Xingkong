@@ -95,20 +95,7 @@ func (a *TaskAdaptor) BuildRequestURL(info *relaycommon.RelayInfo) (string, erro
 	if strings.TrimSpace(region) == "" {
 		region = "global"
 	}
-	if region == "global" {
-		return fmt.Sprintf(
-			"https://aiplatform.googleapis.com/v1/projects/%s/locations/global/publishers/google/models/%s:predictLongRunning",
-			adc.ProjectID,
-			modelName,
-		), nil
-	}
-	return fmt.Sprintf(
-		"https://%s-aiplatform.googleapis.com/v1/projects/%s/locations/%s/publishers/google/models/%s:predictLongRunning",
-		region,
-		adc.ProjectID,
-		region,
-		modelName,
-	), nil
+	return vertexcore.BuildGoogleModelURL(a.baseURL, vertexcore.DefaultAPIVersion, adc.ProjectID, region, modelName, "predictLongRunning"), nil
 }
 
 // BuildRequestHeader sets required headers.
