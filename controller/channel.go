@@ -474,6 +474,9 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 	if channel.Type == constant.ChannelTypeCodex {
 		trimmedKey := strings.TrimSpace(channel.Key)
 		if isAdd || trimmedKey != "" {
+			if trimmedKey == constant.CodexPoolKeyMarker {
+				return nil
+			}
 			if !strings.HasPrefix(trimmedKey, "{") {
 				return fmt.Errorf("Codex key must be a valid JSON object")
 			}

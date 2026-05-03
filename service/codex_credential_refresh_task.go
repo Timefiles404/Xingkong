@@ -63,6 +63,7 @@ func runCodexCredentialAutoRefreshOnce() {
 
 	var refreshed int
 	var scanned int
+	refreshed += runCodexAccountAutoRefreshOnce(ctx, now)
 
 	offset := 0
 	for {
@@ -98,6 +99,9 @@ func runCodexCredentialAutoRefreshOnce() {
 
 			rawKey := strings.TrimSpace(ch.Key)
 			if rawKey == "" {
+				continue
+			}
+			if rawKey == constant.CodexPoolKeyMarker {
 				continue
 			}
 
@@ -145,4 +149,29 @@ func runCodexCredentialAutoRefreshOnce() {
 	if common.DebugEnabled {
 		logger.LogDebug(ctx, "codex credential auto-refresh: scanned=%d refreshed=%d", scanned, refreshed)
 	}
+}
+
+func runCodexAccountAutoRefreshOnce(ctx context.Context, now time.Time) int {
+	var accounts []model.CodexAccount
+	err := model.DB.
+		Where("status = ? AND expired_at > 0 AND expired_at <= ?", model.CodexAccountStatusEnabled, now.Add(codexCredentialRefreshThreshold).Unix()).
+		Order("id asc").
+		Limit(codexCredentialRefreshBatchSize).
+		Find(&accounts).Error
+	if err != nil {
+		logger.LogError(ctx, fmt.Sprintf("codex account auto-refresh: query accounts failed: %v", err))
+		return 0
+	}
+	refreshed := 0
+	for _, account := range accounts {
+		refreshCtx, cancel := context.WithTimeout(ctx, codexCredentialRefreshTimeout)
+		_, err := RefreshCodexAccountCredential(refreshCtx, account.Id)
+		cancel()
+		if err != nil {
+			logger.LogWarn(ctx, fmt.Sprintf("codex account auto-refresh: account_id=%d email=%s refresh failed: %v", account.Id, account.Email, err))
+			continue
+		}
+		refreshed++
+	}
+	return refreshed
 }

@@ -14,6 +14,7 @@ import {
   CreditCard,
   ChartColumnIncreasing,
   Settings,
+  Bot,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { WORKSPACE_IDS } from '@/components/layout/lib/workspace-registry'
@@ -94,6 +95,11 @@ export function useSidebarData(): SidebarData {
             title: t('Channels'),
             url: '/channels',
             icon: Radio,
+          },
+          {
+            title: t('Codex 账号管理'),
+            url: '/codex-accounts',
+            icon: Bot,
           },
           {
             title: t('Models'),

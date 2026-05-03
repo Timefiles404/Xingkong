@@ -8,7 +8,9 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -115,6 +117,13 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 	if info.RelayMode != relayconstant.RelayModeResponses && info.RelayMode != relayconstant.RelayModeResponsesCompact {
 		return nil, types.NewError(errors.New("codex channel: endpoint not supported"), types.ErrorCodeInvalidRequest)
 	}
+	if accountID := c.GetInt("codex_account_id"); accountID > 0 && resp != nil {
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			model.MarkCodexAccountRelayResult(accountID, true, "", 0)
+		} else if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests {
+			model.MarkCodexAccountRelayResult(accountID, false, resp.Status, 300)
+		}
+	}
 
 	if info.RelayMode == relayconstant.RelayModeResponsesCompact {
 		return openai.OaiResponsesCompactionHandler(c, resp)
@@ -149,6 +158,16 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *rel
 	channel.SetupApiRequestHeader(info, c, req)
 
 	key := strings.TrimSpace(info.ApiKey)
+	selectedAccountID := 0
+	if key == constant.CodexPoolKeyMarker {
+		account, err := model.SelectCodexAccountForRelay()
+		if err != nil {
+			return err
+		}
+		key = strings.TrimSpace(account.Credential)
+		selectedAccountID = account.Id
+		c.Set("codex_account_id", selectedAccountID)
+	}
 	if !strings.HasPrefix(key, "{") {
 		return errors.New("codex channel: key must be a JSON object")
 	}
@@ -187,6 +206,5 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *rel
 	} else if req.Get("Accept") == "" {
 		req.Set("Accept", "application/json")
 	}
-
 	return nil
 }

@@ -29,6 +29,7 @@ const (
 type CodexOAuthTokenResult struct {
 	AccessToken  string
 	RefreshToken string
+	IDToken      string
 	ExpiresAt    time.Time
 }
 
@@ -117,6 +118,7 @@ func refreshCodexOAuthToken(
 	var payload struct {
 		AccessToken  string `json:"access_token"`
 		RefreshToken string `json:"refresh_token"`
+		IDToken      string `json:"id_token"`
 		ExpiresIn    int    `json:"expires_in"`
 	}
 
@@ -134,6 +136,7 @@ func refreshCodexOAuthToken(
 	return &CodexOAuthTokenResult{
 		AccessToken:  strings.TrimSpace(payload.AccessToken),
 		RefreshToken: strings.TrimSpace(payload.RefreshToken),
+		IDToken:      strings.TrimSpace(payload.IDToken),
 		ExpiresAt:    time.Now().Add(time.Duration(payload.ExpiresIn) * time.Second),
 	}, nil
 }
@@ -179,6 +182,7 @@ func exchangeCodexAuthorizationCode(
 	var payload struct {
 		AccessToken  string `json:"access_token"`
 		RefreshToken string `json:"refresh_token"`
+		IDToken      string `json:"id_token"`
 		ExpiresIn    int    `json:"expires_in"`
 	}
 	if err := common.DecodeJson(resp.Body, &payload); err != nil {
@@ -193,6 +197,7 @@ func exchangeCodexAuthorizationCode(
 	return &CodexOAuthTokenResult{
 		AccessToken:  strings.TrimSpace(payload.AccessToken),
 		RefreshToken: strings.TrimSpace(payload.RefreshToken),
+		IDToken:      strings.TrimSpace(payload.IDToken),
 		ExpiresAt:    time.Now().Add(time.Duration(payload.ExpiresIn) * time.Second),
 	}, nil
 }

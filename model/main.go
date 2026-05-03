@@ -287,8 +287,12 @@ func migrateDB() error {
 		&PlaygroundImageTask{},
 		&CustomOAuthProvider{},
 		&UserOAuthBinding{},
+		&CodexAccount{},
 	)
 	if err != nil {
+		return err
+	}
+	if err := EnsureDefaultCodexPoolChannel(); err != nil {
 		return err
 	}
 	EnsureDefaultVendors()
@@ -344,6 +348,7 @@ func migrateDBFast() error {
 		{&PlaygroundImageTask{}, "PlaygroundImageTask"},
 		{&CustomOAuthProvider{}, "CustomOAuthProvider"},
 		{&UserOAuthBinding{}, "UserOAuthBinding"},
+		{&CodexAccount{}, "CodexAccount"},
 	}
 	// 动态计算migration数量，确保errChan缓冲区足够大
 	errChan := make(chan error, len(migrations))
@@ -376,6 +381,9 @@ func migrateDBFast() error {
 		if err := DB.AutoMigrate(&SubscriptionPlan{}); err != nil {
 			return err
 		}
+	}
+	if err := EnsureDefaultCodexPoolChannel(); err != nil {
+		return err
 	}
 	migrateSubscriptionRollingLimits()
 	common.SysLog("database migrated")

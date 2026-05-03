@@ -1,6 +1,8 @@
 package constant
 
 const (
+	CodexPoolKeyMarker = "__codex_pool__"
+
 	ChannelTypeUnknown        = 0
 	ChannelTypeOpenAI         = 1
 	ChannelTypeMidjourney     = 2

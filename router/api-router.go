@@ -265,6 +265,19 @@ func SetApiRouter(router *gin.Engine) {
 			channelRoute.POST("/upstream_updates/detect", controller.DetectChannelUpstreamModelUpdates)
 			channelRoute.POST("/upstream_updates/detect_all", controller.DetectAllChannelUpstreamModelUpdates)
 		}
+		codexAccountRoute := apiRouter.Group("/codex_account")
+		codexAccountRoute.Use(middleware.AdminAuth())
+		{
+			codexAccountRoute.GET("/", controller.GetCodexAccounts)
+			codexAccountRoute.POST("/oauth/start", controller.StartCodexAccountOAuth)
+			codexAccountRoute.POST("/oauth/complete", controller.CompleteCodexAccountOAuth)
+			codexAccountRoute.POST("/import", controller.ImportCodexAccounts)
+			codexAccountRoute.GET("/export", controller.ExportCodexAccounts)
+			codexAccountRoute.PUT("/:id", controller.UpdateCodexAccount)
+			codexAccountRoute.DELETE("/:id", controller.DeleteCodexAccount)
+			codexAccountRoute.POST("/:id/refresh", controller.RefreshCodexAccount)
+			codexAccountRoute.GET("/:id/usage", controller.GetCodexAccountUsage)
+		}
 		tokenRoute := apiRouter.Group("/token")
 		tokenRoute.Use(middleware.UserAuth())
 		{
