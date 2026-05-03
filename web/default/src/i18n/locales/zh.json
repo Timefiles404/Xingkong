@@ -4299,6 +4299,12 @@
     "Confirm auto update": "确认自动更新",
     "The server will pull the target image and recreate the app container. The page may disconnect briefly during restart.": "服务器会拉取目标镜像并重建应用容器。重启期间页面可能会短暂断开。",
     "Confirm update": "确认更新",
-    "Updating...": "正在更新..."
+    "Updating...": "正在更新...",
+    "Field Match": "字段匹配",
+    "Field": "字段",
+    "Match by required model fields, ignoring vendor prefixes and separators": "按必要模型字段匹配，忽略供应商前缀和分隔符",
+    "Upstream Models *": "上游模型 *",
+    "Upstream raw model IDs supported by this channel. They are clustered into user-facing models automatically.": "此渠道支持的上游原始模型 ID。系统会自动聚类为用户可见模型。",
+    "Matched upstream model": "匹配的上游模型"
   }
 }

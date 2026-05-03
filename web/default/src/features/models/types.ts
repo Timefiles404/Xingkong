@@ -11,6 +11,7 @@ export interface BoundChannel {
   id: number
   name: string
   type: number
+  upstream_models?: string[]
 }
 
 /**
@@ -220,7 +221,7 @@ export const modelFormSchema = z.object({
   tags: z.array(z.string()).default([]),
   vendor_id: z.number().optional(),
   endpoints: z.string().default(''),
-  name_rule: z.number().min(0).max(3).default(0),
+  name_rule: z.number().min(0).max(4).default(4),
   status: z.boolean().default(true),
   sync_official: z.boolean().default(true),
 })
@@ -260,7 +261,7 @@ export type PrefillGroupFormValues = z.infer<typeof prefillGroupFormSchema>
 /**
  * Name rule type
  */
-export type NameRule = 0 | 1 | 2 | 3 // exact, prefix, contains, suffix
+export type NameRule = 0 | 1 | 2 | 3 | 4 // exact, prefix, contains, suffix, field
 
 /**
  * Model status type

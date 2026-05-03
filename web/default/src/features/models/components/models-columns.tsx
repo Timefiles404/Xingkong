@@ -164,7 +164,7 @@ export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
         <DataTableColumnHeader column={column} title={t('Match Type')} />
       ),
       cell: ({ row }) => {
-        const rule = row.getValue('name_rule') as 0 | 1 | 2 | 3
+        const rule = row.getValue('name_rule') as 0 | 1 | 2 | 3 | 4
         const model = row.original
         const config = NAME_RULE_CONFIG[rule]
 
@@ -392,6 +392,7 @@ export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
           name: string
           type?: number
           status?: number
+          upstream_models?: string[]
         }>
 
         if (!channels || channels.length === 0) {
@@ -418,7 +419,21 @@ export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
                   side='top'
                   className='border-border bg-popover max-h-48 max-w-[320px] overflow-y-auto p-2'
                 >
-                  <div className='flex flex-wrap gap-1'>{channelBadges}</div>
+                  <div className='space-y-2'>
+                    {channels.map((channel) => (
+                      <div key={channel.id} className='space-y-1'>
+                        <div className='text-xs font-medium'>
+                          {channel.name} ({channel.type})
+                        </div>
+                        {channel.upstream_models &&
+                          channel.upstream_models.length > 0 && (
+                            <div className='text-muted-foreground text-[11px]'>
+                              {channel.upstream_models.join(', ')}
+                            </div>
+                          )}
+                      </div>
+                    ))}
+                  </div>
                 </TooltipContent>
               )}
             </Tooltip>

@@ -338,7 +338,7 @@ export const FIELD_DESCRIPTIONS = {
   BASE_URL: 'Custom API base URL. Leave empty to use provider default.',
   KEY: 'API key from the provider',
   MODELS:
-    'List of models supported by this channel. Use comma to separate multiple models.',
+    'Upstream raw model IDs supported by this channel. They are clustered into user-facing models automatically.',
   GROUP: 'User groups that can access this channel. ',
   MODEL_MAPPING:
     'Map request model names to actual provider model names (JSON format)',

@@ -74,6 +74,9 @@ func main() {
 		// for compatibility with old versions
 		common.MemoryCacheEnabled = true
 	}
+	if err := model.EnsureClusteredAbilities(); err != nil {
+		common.FatalLog(fmt.Sprintf("failed to rebuild clustered model abilities: %s", err.Error()))
+	}
 	if common.MemoryCacheEnabled {
 		common.SysLog("memory cache enabled")
 		common.SysLog(fmt.Sprintf("sync frequency: %d seconds", common.SyncFrequency))

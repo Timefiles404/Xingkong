@@ -53,6 +53,7 @@ func ResolveImageGenerationFlags(modelNames []string) (map[string]bool, error) {
 	prefixRules := make([]string, 0)
 	suffixRules := make([]string, 0)
 	containsRules := make([]string, 0)
+	fieldRules := make([]string, 0)
 
 	for _, rule := range rules {
 		meta := ParseAdminModelCapabilityMeta(rule.AdminMeta)
@@ -71,6 +72,10 @@ func ResolveImageGenerationFlags(modelNames []string) (map[string]bool, error) {
 		case NameRuleContains:
 			if meta.ImageGenerationEnabled {
 				containsRules = append(containsRules, rule.ModelName)
+			}
+		case NameRuleFieldMatch:
+			if meta.ImageGenerationEnabled {
+				fieldRules = append(fieldRules, rule.ModelName)
 			}
 		}
 	}
@@ -95,6 +100,12 @@ func ResolveImageGenerationFlags(modelNames []string) (map[string]bool, error) {
 		}
 		for _, contains := range containsRules {
 			if strings.Contains(modelName, contains) {
+				flags[modelName] = true
+				goto resolved
+			}
+		}
+		for _, field := range fieldRules {
+			if scoreCanonicalUpstreamMatch(field, NameRuleFieldMatch, modelName) > 0 {
 				flags[modelName] = true
 				goto resolved
 			}

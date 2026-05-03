@@ -144,7 +144,7 @@ func GetChannel(group string, model string, retry int) (*Channel, error) {
 }
 
 func (channel *Channel) AddAbilities(tx *gorm.DB) error {
-	models_ := strings.Split(channel.Models, ",")
+	models_ := ResolveChannelAbilityModels(strings.Split(channel.Models, ","))
 	groups_ := strings.Split(channel.Group, ",")
 	abilitySet := make(map[string]struct{})
 	abilities := make([]Ability, 0, len(models_))
@@ -216,7 +216,7 @@ func (channel *Channel) UpdateAbilities(tx *gorm.DB) error {
 	}
 
 	// Then add new abilities
-	models_ := strings.Split(channel.Models, ",")
+	models_ := ResolveChannelAbilityModels(strings.Split(channel.Models, ","))
 	groups_ := strings.Split(channel.Group, ",")
 	abilitySet := make(map[string]struct{})
 	abilities := make([]Ability, 0, len(models_))
@@ -284,6 +284,21 @@ func UpdateAbilityByTag(tag string, newTag *string, priority *int64, weight *uin
 
 var fixLock = sync.Mutex{}
 
+const modelClusterAbilityVersion = "20260504-field-match-v1"
+
+func EnsureClusteredAbilities() error {
+	var option Option
+	if err := DB.First(&option, commonKeyCol+" = ?", "ModelClusterAbilityVersion").Error; err == nil && option.Value == modelClusterAbilityVersion {
+		return nil
+	}
+	common.SysLog("rebuilding channel abilities for clustered model routing")
+	_, _, err := FixAbility()
+	if err != nil {
+		return err
+	}
+	return UpdateOption("ModelClusterAbilityVersion", modelClusterAbilityVersion)
+}
+
 func FixAbility() (int, int, error) {
 	lock := fixLock.TryLock()
 	if !lock {
@@ -337,5 +352,6 @@ func FixAbility() (int, int, error) {
 		}
 	}
 	InitChannelCache()
+	RefreshPricing()
 	return successCount, failCount, nil
 }

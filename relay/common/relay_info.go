@@ -198,9 +198,12 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 		ChannelCreateTime:    c.GetInt64("channel_create_time"),
 		ParamOverride:        paramOverride,
 		HeadersOverride:      headerOverride,
-		UpstreamModelName:    common.GetContextKeyString(c, constant.ContextKeyOriginalModel),
+		UpstreamModelName:    common.GetContextKeyString(c, constant.ContextKeyChannelUpstreamModel),
 		IsModelMapped:        false,
 		SupportStreamOptions: false,
+	}
+	if channelMeta.UpstreamModelName == "" {
+		channelMeta.UpstreamModelName = common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
 	}
 
 	if channelType == constant.ChannelTypeAzure {

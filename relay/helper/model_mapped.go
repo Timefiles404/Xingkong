@@ -25,6 +25,10 @@ func ModelMappedHelper(c *gin.Context, info *common.RelayInfo, request dto.Reque
 		mappingModelName = strings.TrimSuffix(originModelName, ratio_setting.CompactModelSuffix)
 	}
 
+	if info.UpstreamModelName != "" && info.UpstreamModelName != mappingModelName {
+		info.IsModelMapped = true
+	}
+
 	// map model name
 	modelMapping := c.GetString("model_mapping")
 	if modelMapping != "" && modelMapping != "{}" {

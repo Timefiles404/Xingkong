@@ -17,6 +17,7 @@ export function getNameRuleOptions(t: TFunction) {
     { label: t('Prefix Match'), value: 1 as NameRule },
     { label: t('Contains Match'), value: 2 as NameRule },
     { label: t('Suffix Match'), value: 3 as NameRule },
+    { label: t('Field Match'), value: 4 as NameRule },
   ] as const
 }
 
@@ -43,6 +44,11 @@ export function getNameRuleConfig(
       label: t('Suffix'),
       color: 'purple',
       description: t('Match models ending with this name'),
+    },
+    4: {
+      label: t('Field'),
+      color: 'info',
+      description: t('Match by required model fields, ignoring vendor prefixes and separators'),
     },
   }
 }

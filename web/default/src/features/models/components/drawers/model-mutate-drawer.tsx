@@ -371,7 +371,7 @@ export function ModelMutateDrawer({
       tags: [],
       vendor_id: undefined,
       endpoints: '',
-      name_rule: 0,
+      name_rule: 4,
       status: true,
       sync_official: true,
       price: '',
@@ -392,7 +392,7 @@ export function ModelMutateDrawer({
       tags: parseModelTags(model?.tags),
       vendor_id: model?.vendor_id,
       endpoints: model?.endpoints || '',
-      name_rule: model?.name_rule || 0,
+      name_rule: model?.name_rule ?? 4,
       status: model ? model.status === 1 : true,
       sync_official: model ? model.sync_official === 1 : true,
       price: '',
@@ -1357,6 +1357,13 @@ export function ModelMutateDrawer({
                                   <div className='text-muted-foreground text-xs'>
                                     {t('Channel ID')}: {channel.id}
                                   </div>
+                                  {channel.upstream_models &&
+                                    channel.upstream_models.length > 0 && (
+                                      <div className='text-muted-foreground mt-1 max-w-xl text-xs'>
+                                        {t('Matched upstream model')}:{' '}
+                                        {channel.upstream_models.join(', ')}
+                                      </div>
+                                    )}
                                 </div>
                                 <div className='text-muted-foreground text-xs'>
                                   {upstreamRate && upstreamRate > 0

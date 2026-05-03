@@ -4299,6 +4299,12 @@
     "Confirm auto update": "Confirm auto update",
     "The server will pull the target image and recreate the app container. The page may disconnect briefly during restart.": "The server will pull the target image and recreate the app container. The page may disconnect briefly during restart.",
     "Confirm update": "Confirm update",
-    "Updating...": "Updating..."
+    "Updating...": "Updating...",
+    "Field Match": "Field Match",
+    "Field": "Field",
+    "Match by required model fields, ignoring vendor prefixes and separators": "Match by required model fields, ignoring vendor prefixes and separators",
+    "Upstream Models *": "Upstream Models *",
+    "Upstream raw model IDs supported by this channel. They are clustered into user-facing models automatically.": "Upstream raw model IDs supported by this channel. They are clustered into user-facing models automatically.",
+    "Matched upstream model": "Matched upstream model"
   }
 }

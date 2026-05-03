@@ -198,6 +198,7 @@ const MODEL_MAPPING_PREVIEW_FALLBACK: Array<{
 
 const ADVANCED_SETTINGS_EXPANDED_KEY = 'channel-advanced-settings-expanded'
 const UPSTREAM_DETECTED_MODEL_PREVIEW_LIMIT = 8
+const SHOW_LEGACY_MODEL_MAPPING = false
 
 function readAdvancedSettingsPreference(): boolean {
   if (typeof window === 'undefined') return false
@@ -206,7 +207,6 @@ function readAdvancedSettingsPreference(): boolean {
 
 function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
   return Boolean(
-    values.model_mapping?.trim() ||
     values.param_override?.trim() ||
     values.header_override?.trim() ||
     values.status_code_mapping?.trim() ||
@@ -971,6 +971,7 @@ export function ChannelMutateDrawer({
 
       // Validate model_mapping JSON format
       const hasModelMapping =
+        SHOW_LEGACY_MODEL_MAPPING &&
         typeof data.model_mapping === 'string' &&
         data.model_mapping.trim() !== ''
 
@@ -2206,7 +2207,7 @@ export function ChannelMutateDrawer({
                   name='models'
                   render={() => (
                     <FormItem>
-                      <FormLabel>{t('Models *')}</FormLabel>
+                      <FormLabel>{t('Upstream Models *')}</FormLabel>
                       <FormControl>
                         <MultiSelect
                           options={modelOptions}
@@ -2328,99 +2329,102 @@ export function ChannelMutateDrawer({
                   </Button>
                 </div>
 
-                <FormField
-                  control={form.control}
-                  name='model_mapping'
-                  render={({ field }) => (
-                    <FormItem>
-                      <div className='flex items-center gap-2'>
-                        <FormLabel className='mb-0'>
-                          {t('Model Mapping')}
-                        </FormLabel>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              type='button'
-                              variant='ghost'
-                              size='icon-sm'
-                              className='text-muted-foreground hover:text-foreground size-auto p-0'
-                              aria-label='How model mapping works'
+                {SHOW_LEGACY_MODEL_MAPPING && (
+                  <FormField
+                    control={form.control}
+                    name='model_mapping'
+                    render={({ field }) => (
+                      <FormItem>
+                        <div className='flex items-center gap-2'>
+                          <FormLabel className='mb-0'>
+                            {t('Model Mapping')}
+                          </FormLabel>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                type='button'
+                                variant='ghost'
+                                size='icon-sm'
+                                className='text-muted-foreground hover:text-foreground size-auto p-0'
+                                aria-label='How model mapping works'
+                              >
+                                <HelpCircle className='h-4 w-4' />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent
+                              side='top'
+                              align='start'
+                              className='max-w-xs space-y-2 text-left'
                             >
-                              <HelpCircle className='h-4 w-4' />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent
-                            side='top'
-                            align='start'
-                            className='max-w-xs space-y-2 text-left'
-                          >
-                            <p className='text-xs font-semibold tracking-wide uppercase'>
-                              {t('Request flow')}
-                            </p>
-                            <div className='space-y-1 font-mono text-xs'>
-                              {mappingPreviewPairs.map((pair) => (
-                                <div
-                                  key={`${pair.source}-${pair.target}`}
-                                  className='flex items-center gap-1'
-                                >
-                                  <span>{pair.source}</span>
-                                  <ArrowRight className='h-3.5 w-3.5 opacity-70' />
-                                  <span>{pair.target}</span>
-                                </div>
-                              ))}
-                              {remainingMappingCount > 0 && (
-                                <div className='text-[11px] opacity-70'>
-                                  +{remainingMappingCount} {t('more mapping')}
-                                  {remainingMappingCount > 1 ? 's' : ''}
-                                </div>
-                              )}
-                            </div>
-                            <p className='text-[11px] leading-relaxed opacity-80'>
+                              <p className='text-xs font-semibold tracking-wide uppercase'>
+                                {t('Request flow')}
+                              </p>
+                              <div className='space-y-1 font-mono text-xs'>
+                                {mappingPreviewPairs.map((pair) => (
+                                  <div
+                                    key={`${pair.source}-${pair.target}`}
+                                    className='flex items-center gap-1'
+                                  >
+                                    <span>{pair.source}</span>
+                                    <ArrowRight className='h-3.5 w-3.5 opacity-70' />
+                                    <span>{pair.target}</span>
+                                  </div>
+                                ))}
+                                {remainingMappingCount > 0 && (
+                                  <div className='text-[11px] opacity-70'>
+                                    +{remainingMappingCount} {t('more mapping')}
+                                    {remainingMappingCount > 1 ? 's' : ''}
+                                  </div>
+                                )}
+                              </div>
+                              <p className='text-[11px] leading-relaxed opacity-80'>
+                                {t(
+                                  'Users call the model on the left. The platform forwards the request to the upstream model on the right.'
+                                )}
+                              </p>
+                            </TooltipContent>
+                          </Tooltip>
+                        </div>
+                        <FormControl>
+                          <ModelMappingEditor
+                            value={field.value || ''}
+                            onChange={field.onChange}
+                            disabled={isSubmitting}
+                          />
+                        </FormControl>
+                        <FormDescription>
+                          {t(FIELD_DESCRIPTIONS.MODEL_MAPPING)}
+                        </FormDescription>
+                        {modelMappingGuardrail.invalidJson && (
+                          <Alert variant='destructive' className='mt-3'>
+                            <AlertDescription>
+                              {t('Model Mapping must be a JSON object like')}{' '}
+                              <code className='font-mono'>
+                                {'{"gpt-4":"Azure-GPT4"}'}
+                              </code>
+                              {t('. Please fix the JSON before saving.')}
+                            </AlertDescription>
+                          </Alert>
+                        )}
+                        {modelMappingGuardrail.missingSourceModels.length >
+                          0 && (
+                          <Alert className='mt-3 border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-50'>
+                            <AlertDescription>
+                              {t('Add')}{' '}
+                              {formatModelNames(
+                                modelMappingGuardrail.missingSourceModels
+                              )}{' '}
                               {t(
-                                'Users call the model on the left. The platform forwards the request to the upstream model on the right.'
+                                'to the Models list so users can use them before the mapping sends traffic upstream.'
                               )}
-                            </p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </div>
-                      <FormControl>
-                        <ModelMappingEditor
-                          value={field.value || ''}
-                          onChange={field.onChange}
-                          disabled={isSubmitting}
-                        />
-                      </FormControl>
-                      <FormDescription>
-                        {t(FIELD_DESCRIPTIONS.MODEL_MAPPING)}
-                      </FormDescription>
-                      {modelMappingGuardrail.invalidJson && (
-                        <Alert variant='destructive' className='mt-3'>
-                          <AlertDescription>
-                            {t('Model Mapping must be a JSON object like')}{' '}
-                            <code className='font-mono'>
-                              {'{"gpt-4":"Azure-GPT4"}'}
-                            </code>
-                            {t('. Please fix the JSON before saving.')}
-                          </AlertDescription>
-                        </Alert>
-                      )}
-                      {modelMappingGuardrail.missingSourceModels.length > 0 && (
-                        <Alert className='mt-3 border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-50'>
-                          <AlertDescription>
-                            {t('Add')}{' '}
-                            {formatModelNames(
-                              modelMappingGuardrail.missingSourceModels
-                            )}{' '}
-                            {t(
-                              'to the Models list so users can use them before the mapping sends traffic upstream.'
-                            )}
-                          </AlertDescription>
-                        </Alert>
-                      )}
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
+                            </AlertDescription>
+                          </Alert>
+                        )}
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                )}
 
                 <FormField
                   control={form.control}
