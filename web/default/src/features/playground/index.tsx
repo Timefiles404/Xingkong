@@ -1,13 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
-  BotIcon,
-  ChevronDownIcon,
   CopyIcon,
-  DownloadIcon,
-  FolderOpenIcon,
-  MessageCircleIcon,
-  PlayIcon,
   SettingsIcon,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -22,18 +16,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { getCommonHeaders } from '@/lib/api'
-import { cn } from '@/lib/utils'
 import {
   chargeExternalAgentRequestFee,
-  sendChatCompletion,
   getUserModels,
   getUserGroups,
 } from './api'
@@ -42,18 +28,22 @@ import { PlaygroundFileSidebar } from './components/playground-file-sidebar'
 import { PlaygroundAgentSettingsDialog } from './components/playground-agent-settings-dialog'
 import { PlaygroundChat } from './components/playground-chat'
 import { PlaygroundInput } from './components/playground-input'
+import { PlaygroundModeToolbar } from './components/playground-mode-toolbar'
 import { API_ENDPOINTS, DEFAULT_GROUP } from './constants'
 import { usePlaygroundState, useChatHandler } from './hooks'
 import {
-  AGENT_SYSTEM_PROMPT,
   buildModelVisibleAgentMessages,
+  buildAgentInstructions,
+  buildAgentPromptCacheKey,
+  buildAgentSummaryPrompt,
   buildAgentHelperManualCommand,
   buildAgentToolReviewResults,
   buildChatCompletionPayload,
   calculateAgentContextUsage,
   prepareAgentContextCompaction,
   checkAgentHelperStatus,
-  createMessageVersion,
+  createAgentContextEventMessage,
+  createAgentSystemMessage,
   createUserMessage,
   createLoadingAssistantMessage,
   downloadAgentHelperToWorkspace,
@@ -61,18 +51,22 @@ import {
   finalizeMessage,
   formatMessageForAPI,
   formatAgentToolResults,
+  getCompactionSourceCharCount,
   getCompleteAgentToolBlockEnd,
   getAgentHelperDownloadTarget,
+  getHelperWorkspaceName,
   isAgentHelperPaired,
   getVisibleAgentContent,
   isOpenAIFastMode,
   isOpenAIReasoningModel,
   isValidMessage,
   isFileSystemAccessSupported,
+  isWorkspaceMutatingToolCall,
   loadHelperAgentConversations,
   launchAgentHelperProtocol,
   pairAgentHelper,
   parseAgentToolCalls,
+  requestAgentContextSummaryModel,
   requestWorkspaceDirectory,
   requiresAgentToolApproval,
   saveHelperAgentConversations,
@@ -131,17 +125,6 @@ interface ResponsesFunctionCallAccumulator {
   done: boolean
 }
 
-function isWorkspaceMutatingToolCall(call: AgentToolCall): boolean {
-  return ['write_file', 'append_file', 'batch_edit', 'create_dir'].includes(
-    call.tool
-  )
-}
-
-function getHelperWorkspaceName(status: AgentHelperStatus | null): string {
-  const workspace = status?.workspace?.replace(/\\/g, '/').replace(/\/+$/, '')
-  return workspace?.split('/').filter(Boolean).pop() || 'Helper workspace'
-}
-
 const AGENT_TOOL_NAMES = new Set<AgentToolName>([
   'list_dir',
   'read_file',
@@ -153,272 +136,6 @@ const AGENT_TOOL_NAMES = new Set<AgentToolName>([
   'create_dir',
   'run_command',
 ])
-
-function createAgentSystemMessage(
-  workspaceName: string,
-  helperStatus: AgentHelperStatus | null,
-  extraSystemPrompt = ''
-): MessageType {
-  return {
-    key: 'agent-system',
-    from: 'system',
-    versions: [
-      createMessageVersion(
-        buildAgentInstructions(workspaceName, false, helperStatus, extraSystemPrompt)
-      ),
-    ],
-  }
-}
-
-function buildAgentInstructions(
-  workspaceName: string,
-  useNativeResponsesTools: boolean,
-  helperStatus: AgentHelperStatus | null,
-  extraSystemPrompt = ''
-): string {
-  const workspaceLine = `当前工作目录: ${workspaceName || '未选择'}`
-  const helperLine = helperStatus
-    ? `本地 helper: 已连接，命令工作目录 ${helperStatus.workspace}，Shell ${helperStatus.shell}`
-    : '本地 helper: 未连接；不要尝试运行终端命令。'
-  const customPrompt = extraSystemPrompt.trim()
-    ? `\n\n用户自定义 Agent 规则:\n${extraSystemPrompt.trim()}`
-    : ''
-  if (!useNativeResponsesTools) {
-    return `${AGENT_SYSTEM_PROMPT}\n\n${workspaceLine}\n${helperLine}${customPrompt}`
-  }
-
-  return `你是运行在浏览器网页端的 Agent。你不能访问服务器文件系统；你只能通过用户已授权的本地工作目录使用文件工具。若本地 helper 已连接，你还可以在用户审批后调用本地命令行工具。
-
-回答风格:
-- 直接、务实、像资深工程师一样给结论和关键依据。
-- 默认用短段落或简短列表，避免寒暄、套话和自我说明。
-- 非必要不要频繁分段；不要连续输出多个空行。
-- 简单结果用 1-2 段说明即可；复杂结果最多使用少量扁平项目符号。
-- 当你提到工作区内文件时，优先使用 Markdown 文件引用: [文件名](file://相对路径)，不要使用绝对路径。
-
-工具规则:
-- 当前运行环境支持 OpenAI Responses 原生 function tools。
-- 需要使用工具时，必须调用已提供的 function tool。
-- 不要输出 <agent_tools> XML 或 agent_tools 代码块。
-- 工具返回后继续分析；任务完成时直接给用户自然语言答复。
-- ${helperStatus ? '本地 helper 已连接，可以按需调用 run_command。' : '本地 helper 未连接，不要调用 run_command。'}
-- 调用 run_command 时必须填写非空 command；cwd 只表示相对工作目录，不是命令。列目录优先用 list_dir，可用 depth 获取多层目录；若用户明确要求命令行列目录，Windows 用 dir，macOS/Linux 用 ls -la。
-
-${workspaceLine}
-${helperLine}${customPrompt}`
-}
-
-function buildAgentPromptCacheKey(
-  conversationId?: string | null
-): string | undefined {
-  if (!conversationId) return undefined
-  return `xingkong-playground-agent:${conversationId}`
-}
-
-function createAgentContextEventMessage(
-  content: string,
-  status: MessageType['status'] = 'complete',
-  tooltip?: string
-): MessageType {
-  return {
-    ...createLoadingAssistantMessage(),
-    apiContent: tooltip,
-    isAgentContextEvent: true,
-    status,
-    versions: [createMessageVersion(content)],
-  }
-}
-
-function getMessageCompactionText(message: MessageType): string {
-  if (message.isAgentContextEvent) return ''
-  if (message.key === 'agent-context-summary') {
-    return `previous_summary:\n${message.versions?.[0]?.content || ''}`
-  }
-  if (message.isAgentToolResult) {
-    const results = message.agentToolResults || []
-    return [
-      'tool_results:',
-      ...results.map((result) =>
-        [
-          `- ${result.tool} ${result.path || '.'}`,
-          result.ok ? 'ok' : 'failed',
-          result.summary ? `summary:\n${result.summary}` : '',
-          result.output ? `output:\n${result.output}` : '',
-          result.error ? `error:\n${result.error}` : '',
-        ]
-          .filter(Boolean)
-          .join('\n')
-      ),
-    ].join('\n')
-  }
-  const formatted = isValidMessage(message) ? formatMessageForAPI(message) : null
-  if (!formatted) return ''
-  const content =
-    typeof formatted.content === 'string'
-      ? formatted.content
-      : formatted.content
-          .map((part) => {
-            if (part.type === 'text') return part.text || ''
-            if (part.type === 'image_url') return '[image]'
-            return ''
-          })
-          .join('\n')
-  const nativeItems = message.agentResponsesOutputItems?.length
-    ? `\n\nnative_responses_output_items:\n${JSON.stringify(
-        message.agentResponsesOutputItems
-      )}`
-    : ''
-  return `${formatted.role}:\n${content}${nativeItems}`
-}
-
-function buildAgentSummaryPrompt(
-  previousSummary: string | undefined,
-  compactedMessages: MessageType[],
-  workspaceName: string
-): string {
-  const transcript = compactedMessages
-    .map(getMessageCompactionText)
-    .filter(Boolean)
-    .join('\n\n---\n\n')
-
-  return [
-    '你是代码 Agent 的上下文压缩器。请把旧对话压缩成后续 Agent 可以继续工作的摘要。',
-    '',
-    '要求:',
-    '- 用中文输出，结构清晰但不要冗长。',
-    '- 保留用户目标、硬性约束、已完成修改、未完成任务、关键文件路径、重要命令结果和风险。',
-    '- 工具输出只保留对后续有用的事实，不要机械复述长日志。',
-    '- 不要引用旧的 function_call/call_id，也不要要求读取已压缩消息。',
-    '- 后续如果需要文件细节，Agent 应重新读取文件。',
-    '',
-    `工作目录: ${workspaceName || '未选择'}`,
-    previousSummary ? `\n已有摘要:\n${previousSummary}` : '',
-    '',
-    '需要压缩的旧对话:',
-    transcript || '(empty)',
-  ].join('\n')
-}
-
-function getCompactionSourceCharCount(
-  previousSummary: string | undefined,
-  compactedMessages: MessageType[]
-): number {
-  const previousLength = previousSummary?.length || 0
-  const compactedLength = compactedMessages
-    .map(getMessageCompactionText)
-    .filter(Boolean)
-    .join('\n\n---\n\n').length
-  return previousLength + compactedLength
-}
-
-function extractExternalResponsesText(payload: unknown): string {
-  const response = payload as {
-    output_text?: string
-    output?: Array<{
-      content?: Array<{ text?: string; type?: string }>
-    }>
-  }
-  if (response.output_text) return response.output_text
-  return (response.output || [])
-    .flatMap((item) => item.content || [])
-    .map((part) => part.text || '')
-    .join('')
-}
-
-async function requestAgentContextSummaryModel(
-  prompt: string,
-  settings: AgentSettings,
-  config: PlaygroundConfig,
-  externalProviders: AgentExternalProvider[]
-): Promise<string> {
-  if (settings.context.summaryProviderKind === 'external') {
-    const provider =
-      externalProviders.find(
-        (item) => item.id === settings.context.summaryExternalProviderId
-      ) ||
-      externalProviders.find((item) => item.id === settings.activeExternalProviderId) ||
-      externalProviders[0]
-    if (!provider) throw new Error('summary_external_provider_missing')
-    const model =
-      settings.context.summaryExternalModel ||
-      provider.selectedModel ||
-      provider.models[0]?.value
-    if (!model) throw new Error('summary_external_model_missing')
-
-    await chargeExternalRequestFeeOnce()
-    if (provider.endpointType === 'responses') {
-      const response = await fetch(externalEndpoint(provider.baseUrl, '/responses'), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${provider.apiKey}`,
-        },
-        body: JSON.stringify({
-          model,
-          instructions: '你只负责压缩 Agent 上下文，直接输出摘要正文。',
-          input: prompt,
-          stream: false,
-        }),
-      })
-      if (!response.ok) {
-        throw new Error(`summary_http_${response.status}: ${await response.text()}`)
-      }
-      const text = extractExternalResponsesText(await response.json()).trim()
-      if (!text) throw new Error('summary_empty')
-      return text
-    }
-
-    const response = await fetch(
-      externalEndpoint(provider.baseUrl, '/chat/completions'),
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${provider.apiKey}`,
-        },
-        body: JSON.stringify({
-          model,
-          messages: [
-            {
-              role: 'system',
-              content: '你只负责压缩 Agent 上下文，直接输出摘要正文。',
-            },
-            { role: 'user', content: prompt },
-          ],
-          stream: false,
-          temperature: 0.2,
-        }),
-      }
-    )
-    if (!response.ok) {
-      throw new Error(`summary_http_${response.status}: ${await response.text()}`)
-    }
-    const payload = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string } }>
-    }
-    const text = payload.choices?.[0]?.message?.content?.trim()
-    if (!text) throw new Error('summary_empty')
-    return text
-  }
-
-  const model = settings.context.summaryBuiltinModel || config.model
-  const response = await sendChatCompletion({
-    model,
-    group: config.group || DEFAULT_GROUP,
-    stream: false,
-    temperature: 0.2,
-    messages: [
-      {
-        role: 'system',
-        content: '你只负责压缩 Agent 上下文，直接输出摘要正文。',
-      },
-      { role: 'user', content: prompt },
-    ],
-  })
-  const text = response.choices?.[0]?.message?.content?.trim()
-  if (!text) throw new Error('summary_empty')
-  return text
-}
 
 function toResponsesInputContent(
   role: 'user' | 'assistant',
@@ -2903,133 +2620,21 @@ export function Playground() {
 
       {/* Full-width scroll container: scrolling works even over side whitespace */}
       <div className='flex flex-1 flex-col overflow-hidden'>
-        <div className='mx-auto hidden w-full max-w-4xl px-4 pt-4 sm:block'>
-          <div className='bg-muted/35 flex flex-col gap-3 rounded-2xl border p-2 shadow-sm sm:flex-row sm:items-center sm:justify-between'>
-            <div className='flex gap-1 rounded-xl bg-background/80 p-1'>
-              <Button
-                className={cn(
-                  'h-9 rounded-lg px-3',
-                  mode === 'chat' && 'bg-primary text-primary-foreground'
-                )}
-                disabled={isBusy}
-                onClick={() => handleModeChange('chat')}
-                size='sm'
-                type='button'
-                variant={mode === 'chat' ? 'default' : 'ghost'}
-              >
-                <MessageCircleIcon className='mr-2 size-4' />
-                {t('Chat mode')}
-              </Button>
-              <Button
-                className={cn(
-                  'h-9 rounded-lg px-3',
-                  mode === 'agent' && 'bg-primary text-primary-foreground'
-                )}
-                disabled={isBusy}
-                onClick={() => handleModeChange('agent')}
-                size='sm'
-                type='button'
-                variant={mode === 'agent' ? 'default' : 'ghost'}
-              >
-                <BotIcon className='mr-2 size-4' />
-                {t('Agent mode')}
-              </Button>
-            </div>
-
-            {isAgentMode && (
-              <div className='flex flex-wrap items-center gap-2 text-sm'>
-                <span className='text-muted-foreground'>
-                  {activeWorkspaceHandle
-                    ? t('Workspace: {{name}}', {
-                        name: activeWorkspaceName,
-                      })
-                    : usableHelperStatus
-                      ? t('Workspace: {{name}}', {
-                          name: activeWorkspaceName,
-                        })
-                      : t('No workspace selected')}
-                </span>
-                <span
-                  className={cn(
-                    'rounded-full border px-2 py-1 text-xs',
-                    isHelperConnected
-                      ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
-                      : agentHelperStatus
-                        ? 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300'
-                      : 'border-muted-foreground/20 text-muted-foreground'
-                  )}
-                  title={
-                    agentHelperStatus
-                      ? agentHelperStatus.workspace_warning
-                        ? `${agentHelperStatus.workspace}\n${agentHelperStatus.workspace_warning}`
-                        : agentHelperStatus.workspace
-                      : t('Start local helper to enable terminal tools')
-                  }
-                >
-                  {agentHelperStatus?.workspace_warning
-                    ? t('Helper workspace warning')
-                    : isHelperConnected
-                      ? t('Helper connected')
-                      : agentHelperStatus
-                        ? t('Helper pairing required')
-                      : t('Helper offline')}
-                </span>
-                {!usableHelperStatus && (
-                  <Button
-                    disabled={isBusy}
-                    onClick={() => void pickWorkspace()}
-                    size='sm'
-                    type='button'
-                    variant='outline'
-                  >
-                    <FolderOpenIcon className='mr-2 size-4' />
-                    {activeWorkspaceHandle
-                      ? t('Change folder')
-                      : t('Select folder')}
-                  </Button>
-                )}
-                {!isHelperConnected && (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        disabled={isBusy || isHelperDownloading || isHelperPairing}
-                        size='sm'
-                        type='button'
-                        variant='outline'
-                      >
-                        <DownloadIcon className='mr-2 size-4' />
-                        {isHelperDownloading
-                          ? t('Downloading helper')
-                          : t('Helper actions')}
-                        <ChevronDownIcon className='ml-2 size-3.5' />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align='end' className='w-48'>
-                      <DropdownMenuItem
-                        disabled={isHelperDownloading}
-                        onClick={() => void handleDownloadHelper()}
-                      >
-                        <DownloadIcon className='mr-2 size-4' />
-                        {t('Download helper')}
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => void handleStartHelper()}>
-                        <PlayIcon className='mr-2 size-4' />
-                        {t('Start helper')}
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        disabled={isHelperPairing}
-                        onClick={() => setIsHelperPairDialogOpen(true)}
-                      >
-                        <BotIcon className='mr-2 size-4' />
-                        {t('Pair helper')}
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
+        <PlaygroundModeToolbar
+          activeWorkspaceName={activeWorkspaceName}
+          hasBrowserWorkspace={!!activeWorkspaceHandle}
+          helperStatus={agentHelperStatus}
+          isBusy={isBusy}
+          isHelperConnected={isHelperConnected}
+          isHelperDownloading={isHelperDownloading}
+          isHelperPairing={isHelperPairing}
+          mode={mode}
+          onDownloadHelper={() => void handleDownloadHelper()}
+          onModeChange={handleModeChange}
+          onOpenPairDialog={() => setIsHelperPairDialogOpen(true)}
+          onPickWorkspace={() => void pickWorkspace()}
+          onStartHelper={() => void handleStartHelper()}
+        />
 
         <PlaygroundChat
           messages={messages}
