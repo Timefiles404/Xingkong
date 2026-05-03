@@ -5,7 +5,9 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -56,6 +58,12 @@ func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.Rela
 
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
 	isCompact := info != nil && info.RelayMode == relayconstant.RelayModeResponsesCompact
+	if c != nil {
+		c.Set("codex_requested_model", request.Model)
+		if sessionKey := codexSessionKeyFromResponsesRequest(request); sessionKey != "" {
+			c.Set("codex_session_key", sessionKey)
+		}
+	}
 
 	if info != nil && info.ChannelSetting.SystemPrompt != "" {
 		systemPrompt := info.ChannelSetting.SystemPrompt
@@ -110,7 +118,23 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 }
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
-	return channel.DoApiRequest(a, c, info, requestBody)
+	resp, err := channel.DoApiRequest(a, c, info, requestBody)
+	if err != nil {
+		if accountID := c.GetInt("codex_account_id"); accountID > 0 && shouldCooldownCodexAccountForLocalError(err) {
+			model.MarkCodexAccountModelRelayResult(accountID, codexRequestedModel(c, info), false, err.Error(), 30, false)
+		}
+		return resp, err
+	}
+	if resp != nil {
+		if accountID := c.GetInt("codex_account_id"); accountID > 0 {
+			if resp.StatusCode >= 400 {
+				if cooldown, accountWide := codexCooldownFromResponse(resp); cooldown > 0 {
+					model.MarkCodexAccountModelRelayResult(accountID, codexRequestedModel(c, info), false, resp.Status, cooldown, accountWide)
+				}
+			}
+		}
+	}
+	return resp, nil
 }
 
 func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
@@ -120,8 +144,9 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 	if accountID := c.GetInt("codex_account_id"); accountID > 0 && resp != nil {
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			model.MarkCodexAccountRelayResult(accountID, true, "", 0)
-		} else if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests {
-			model.MarkCodexAccountRelayResult(accountID, false, resp.Status, 300)
+			model.MarkCodexAccountModelRelayResult(accountID, codexRequestedModel(c, info), true, "", 0, false)
+		} else if cooldown, accountWide := codexCooldownFromResponse(resp); cooldown > 0 {
+			model.MarkCodexAccountModelRelayResult(accountID, codexRequestedModel(c, info), false, resp.Status, cooldown, accountWide)
 		}
 	}
 
@@ -160,7 +185,7 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *rel
 	key := strings.TrimSpace(info.ApiKey)
 	selectedAccountID := 0
 	if key == constant.CodexPoolKeyMarker {
-		account, err := model.SelectCodexAccountForRelay()
+		account, err := model.SelectCodexAccountForRelay(codexSessionKeyFromContext(c), codexRequestedModel(c, info))
 		if err != nil {
 			return err
 		}
@@ -207,4 +232,117 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *rel
 		req.Set("Accept", "application/json")
 	}
 	return nil
+}
+
+func codexRequestedModel(c *gin.Context, info *relaycommon.RelayInfo) string {
+	if c != nil {
+		if modelName := strings.TrimSpace(c.GetString("codex_requested_model")); modelName != "" {
+			return modelName
+		}
+	}
+	if info != nil {
+		return strings.TrimSpace(info.OriginModelName)
+	}
+	return ""
+}
+
+func codexSessionKeyFromContext(c *gin.Context) string {
+	if c == nil || c.Request == nil {
+		return ""
+	}
+	if sessionKey := strings.TrimSpace(c.GetString("codex_session_key")); sessionKey != "" {
+		return "prompt_cache:" + sessionKey
+	}
+	for _, name := range []string{"X-Session-ID", "Session_id", "X-Client-Request-Id"} {
+		if value := strings.TrimSpace(c.Request.Header.Get(name)); value != "" {
+			return strings.ToLower(name) + ":" + value
+		}
+	}
+	return ""
+}
+
+func codexSessionKeyFromResponsesRequest(request dto.OpenAIResponsesRequest) string {
+	if key := rawJSONString(request.PromptCacheKey); key != "" {
+		return key
+	}
+	if request.PreviousResponseID != "" {
+		return "previous_response:" + request.PreviousResponseID
+	}
+	return rawJSONString(request.User)
+}
+
+func rawJSONString(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return strings.TrimSpace(s)
+	}
+	return strings.Trim(strings.TrimSpace(string(raw)), `"`)
+}
+
+func codexCooldownSecondsFromResponse(resp *http.Response) int64 {
+	seconds, _ := codexCooldownFromResponse(resp)
+	return seconds
+}
+
+func codexCooldownFromResponse(resp *http.Response) (int64, bool) {
+	if resp == nil {
+		return 0, false
+	}
+	switch resp.StatusCode {
+	case http.StatusUnauthorized:
+		return 3600, true
+	case http.StatusForbidden:
+		return 3600, false
+	case http.StatusTooManyRequests:
+		if seconds := parseRetryAfterSeconds(resp.Header.Get("Retry-After")); seconds > 0 {
+			return seconds, false
+		}
+		return 300, false
+	default:
+		if resp.StatusCode >= 500 {
+			return 60, false
+		}
+		return 0, false
+	}
+}
+
+func parseRetryAfterSeconds(raw string) int64 {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0
+	}
+	if n, err := strconv.ParseInt(raw, 10, 64); err == nil {
+		if n < 0 {
+			return 0
+		}
+		if n > 86400 {
+			return 86400
+		}
+		return n
+	}
+	if t, err := http.ParseTime(raw); err == nil {
+		seconds := int64(time.Until(t).Seconds())
+		if seconds < 0 {
+			return 0
+		}
+		if seconds > 86400 {
+			return 86400
+		}
+		return seconds
+	}
+	return 0
+}
+
+func shouldCooldownCodexAccountForLocalError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return !strings.Contains(msg, "context canceled") &&
+		!strings.Contains(msg, "client gone") &&
+		!strings.Contains(msg, "broken pipe") &&
+		!strings.Contains(msg, "request canceled")
 }

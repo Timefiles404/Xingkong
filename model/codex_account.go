@@ -3,6 +3,7 @@ package model
 import (
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"strings"
 	"time"
 
@@ -26,6 +27,8 @@ type CodexAccount struct {
 	Credential    string `json:"-" gorm:"type:text;not null"`
 	BaseURL       string `json:"base_url" gorm:"type:varchar(512);default:'https://chatgpt.com'"`
 	Proxy         string `json:"proxy" gorm:"type:varchar(512);default:''"`
+	Priority      int    `json:"priority" gorm:"default:0;index"`
+	Note          string `json:"note" gorm:"type:text"`
 	Status        int    `json:"status" gorm:"default:1"`
 	LastRefresh   int64  `json:"last_refresh" gorm:"bigint;default:0"`
 	ExpiredAt     int64  `json:"expired_at" gorm:"bigint;default:0"`
@@ -38,9 +41,31 @@ type CodexAccount struct {
 	UpdatedAt     int64  `json:"updated_at" gorm:"bigint"`
 }
 
+type CodexAccountAffinity struct {
+	Id           int    `json:"id"`
+	SessionKey   string `json:"session_key" gorm:"type:varchar(255);uniqueIndex"`
+	Model        string `json:"model" gorm:"type:varchar(128);index"`
+	AccountRowID int    `json:"account_row_id" gorm:"index"`
+	CreatedAt    int64  `json:"created_at" gorm:"bigint"`
+	UpdatedAt    int64  `json:"updated_at" gorm:"bigint"`
+	LastUsedTime int64  `json:"last_used_time" gorm:"bigint"`
+}
+
+type CodexAccountModelState struct {
+	Id            int    `json:"id"`
+	AccountRowID  int    `json:"account_row_id" gorm:"uniqueIndex:idx_codex_account_model_state"`
+	Model         string `json:"model" gorm:"type:varchar(128);uniqueIndex:idx_codex_account_model_state"`
+	NextRetryTime int64  `json:"next_retry_time" gorm:"bigint;default:0;index"`
+	FailedCount   int64  `json:"failed_count" gorm:"bigint;default:0"`
+	LastError     string `json:"last_error" gorm:"type:text"`
+	CreatedAt     int64  `json:"created_at" gorm:"bigint"`
+	UpdatedAt     int64  `json:"updated_at" gorm:"bigint"`
+}
+
 type CodexAccountPublic struct {
 	CodexAccount
-	HasRefreshToken bool `json:"has_refresh_token"`
+	HasRefreshToken bool                     `json:"has_refresh_token"`
+	ModelStates     []CodexAccountModelState `json:"model_states,omitempty"`
 }
 
 type CodexOAuthCredential struct {
@@ -53,6 +78,11 @@ type CodexOAuthCredential struct {
 	Email       string `json:"email,omitempty"`
 	Type        string `json:"type,omitempty"`
 	Expired     string `json:"expired,omitempty"`
+
+	Priority int    `json:"priority,omitempty"`
+	Note     string `json:"note,omitempty"`
+	ProxyURL string `json:"proxy_url,omitempty"`
+	Disabled *bool  `json:"disabled,omitempty"`
 }
 
 func (a *CodexAccount) BeforeCreate(tx *gorm.DB) error {
@@ -77,13 +107,60 @@ func (a *CodexAccount) BeforeUpdate(tx *gorm.DB) error {
 	return nil
 }
 
+func (a *CodexAccountAffinity) BeforeCreate(tx *gorm.DB) error {
+	now := common.GetTimestamp()
+	if a.CreatedAt == 0 {
+		a.CreatedAt = now
+	}
+	if a.UpdatedAt == 0 {
+		a.UpdatedAt = now
+	}
+	if a.LastUsedTime == 0 {
+		a.LastUsedTime = now
+	}
+	return nil
+}
+
+func (a *CodexAccountAffinity) BeforeUpdate(tx *gorm.DB) error {
+	a.UpdatedAt = common.GetTimestamp()
+	return nil
+}
+
+func (s *CodexAccountModelState) BeforeCreate(tx *gorm.DB) error {
+	now := common.GetTimestamp()
+	if s.CreatedAt == 0 {
+		s.CreatedAt = now
+	}
+	if s.UpdatedAt == 0 {
+		s.UpdatedAt = now
+	}
+	return nil
+}
+
+func (s *CodexAccountModelState) BeforeUpdate(tx *gorm.DB) error {
+	s.UpdatedAt = common.GetTimestamp()
+	return nil
+}
+
 func (a *CodexAccount) Public() CodexAccountPublic {
 	pub := CodexAccountPublic{CodexAccount: *a}
 	pub.Credential = ""
 	if key, err := ParseCodexOAuthCredential(a.Credential); err == nil {
 		pub.HasRefreshToken = strings.TrimSpace(key.RefreshToken) != ""
 	}
+	_ = DB.Where("account_row_id = ? AND next_retry_time > 0", a.Id).
+		Order("next_retry_time desc").
+		Find(&pub.ModelStates).Error
 	return pub
+}
+
+func CodexOfficialModelList() []string {
+	return []string{
+		"gpt-5.5",
+		"gpt-5.4",
+		"gpt-5.3-codex",
+		"gpt-5.3-codex-spark",
+	}
 }
 
 func EnsureDefaultCodexPoolChannel() error {
@@ -91,6 +168,7 @@ func EnsureDefaultCodexPoolChannel() error {
 	err := DB.Where("type = ? AND "+commonKeyCol+" = ?", constant.ChannelTypeCodex, constant.CodexPoolKeyMarker).First(&channel).Error
 	if err == nil {
 		updates := map[string]any{}
+		models := strings.Join(CodexOfficialModelList(), ",")
 		if strings.TrimSpace(channel.Name) == "" {
 			updates["name"] = "Codex官方渠道"
 		}
@@ -99,6 +177,9 @@ func EnsureDefaultCodexPoolChannel() error {
 		}
 		if strings.TrimSpace(channel.Group) == "" {
 			updates["group"] = "default"
+		}
+		if strings.TrimSpace(channel.Models) != models {
+			updates["models"] = models
 		}
 		if len(updates) > 0 {
 			return DB.Model(&Channel{}).Where("id = ?", channel.Id).Updates(updates).Error
@@ -119,7 +200,7 @@ func EnsureDefaultCodexPoolChannel() error {
 		Status:      common.ChannelStatusEnabled,
 		BaseURL:     &baseURL,
 		Group:       "default",
-		Models:      "gpt-5,gpt-5-codex,gpt-5-codex-mini,gpt-5.1,gpt-5.1-codex,gpt-5.1-codex-max,gpt-5.1-codex-mini,gpt-5.2,gpt-5.2-codex,gpt-5.3-codex,gpt-5.3-codex-spark",
+		Models:      strings.Join(CodexOfficialModelList(), ","),
 		CreatedTime: common.GetTimestamp(),
 		AutoBan:     &autoBan,
 		Priority:    &priority,
@@ -141,6 +222,9 @@ func UpsertCodexAccountFromOAuthKey(key CodexOAuthCredential, name string, baseU
 	if strings.TrimSpace(baseURL) == "" {
 		baseURL = "https://chatgpt.com"
 	}
+	if strings.TrimSpace(proxy) == "" && strings.TrimSpace(key.ProxyURL) != "" {
+		proxy = key.ProxyURL
+	}
 	encoded, err := common.Marshal(key)
 	if err != nil {
 		return nil, err
@@ -156,6 +240,10 @@ func UpsertCodexAccountFromOAuthKey(key CodexOAuthCredential, name string, baseU
 	if strings.TrimSpace(name) == "" {
 		name = accountID
 	}
+	status := CodexAccountStatusEnabled
+	if key.Disabled != nil && *key.Disabled {
+		status = CodexAccountStatusDisabled
+	}
 
 	account := CodexAccount{
 		Name:        strings.TrimSpace(name),
@@ -164,7 +252,9 @@ func UpsertCodexAccountFromOAuthKey(key CodexOAuthCredential, name string, baseU
 		Credential:  string(encoded),
 		BaseURL:     strings.TrimSpace(baseURL),
 		Proxy:       strings.TrimSpace(proxy),
-		Status:      CodexAccountStatusEnabled,
+		Priority:    key.Priority,
+		Note:        strings.TrimSpace(key.Note),
+		Status:      status,
 		LastRefresh: lastRefresh,
 		ExpiredAt:   expiredAt,
 		LastError:   "",
@@ -177,6 +267,8 @@ func UpsertCodexAccountFromOAuthKey(key CodexOAuthCredential, name string, baseU
 			"credential":   account.Credential,
 			"base_url":     account.BaseURL,
 			"proxy":        account.Proxy,
+			"priority":     account.Priority,
+			"note":         account.Note,
 			"status":       account.Status,
 			"last_refresh": account.LastRefresh,
 			"expired_at":   account.ExpiredAt,
@@ -193,27 +285,146 @@ func UpsertCodexAccountFromOAuthKey(key CodexOAuthCredential, name string, baseU
 	return &account, nil
 }
 
-func SelectCodexAccountForRelay() (*CodexAccount, error) {
-	now := common.GetTimestamp()
+func normalizeCodexAffinityKey(sessionKey string, model string) string {
+	sessionKey = strings.TrimSpace(sessionKey)
+	if sessionKey == "" {
+		return ""
+	}
+	model = strings.TrimSpace(model)
+	if model == "" {
+		model = "default"
+	}
+	key := "codex::" + model + "::" + sessionKey
+	if len(key) <= 240 {
+		return key
+	}
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(key))
+	return fmt.Sprintf("codex::%s::hash:%016x", truncateCodexAffinityPart(model, 80), h.Sum64())
+}
+
+func truncateCodexAffinityPart(s string, limit int) string {
+	s = strings.TrimSpace(s)
+	if limit <= 0 || len(s) <= limit {
+		return s
+	}
+	return s[:limit]
+}
+
+func touchSelectedCodexAccount(tx *gorm.DB, account *CodexAccount, now int64) error {
+	if account == nil || account.Id <= 0 {
+		return nil
+	}
+	return tx.Model(&CodexAccount{}).Where("id = ?", account.Id).Updates(map[string]any{
+		"last_used_time": now,
+		"used_count":     gorm.Expr("used_count + ?", 1),
+		"updated_at":     now,
+	}).Error
+}
+
+func bindCodexAccountAffinity(tx *gorm.DB, sessionKey string, modelName string, accountID int, now int64) error {
+	sessionKey = normalizeCodexAffinityKey(sessionKey, modelName)
+	if sessionKey == "" || accountID <= 0 {
+		return nil
+	}
+	affinity := CodexAccountAffinity{
+		SessionKey:   sessionKey,
+		Model:        truncateCodexAffinityPart(modelName, 128),
+		AccountRowID: accountID,
+		LastUsedTime: now,
+	}
+	return tx.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "session_key"}},
+		DoUpdates: clause.Assignments(map[string]any{
+			"model":          affinity.Model,
+			"account_row_id": accountID,
+			"last_used_time": now,
+			"updated_at":     now,
+		}),
+	}).Create(&affinity).Error
+}
+
+func selectAvailableCodexAccount(tx *gorm.DB, now int64) (*CodexAccount, error) {
+	return selectAvailableCodexAccountForModel(tx, now, "")
+}
+
+func selectAvailableCodexAccountForModel(tx *gorm.DB, now int64, modelName string) (*CodexAccount, error) {
 	var account CodexAccount
-	err := DB.Where("status = ? AND (next_retry_time = 0 OR next_retry_time <= ?)", CodexAccountStatusEnabled, now).
-		Order("last_used_time asc, id asc").
-		First(&account).Error
+	q := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("status = ? AND (next_retry_time = 0 OR next_retry_time <= ?)", CodexAccountStatusEnabled, now).
+		Order("priority desc, last_used_time asc, id asc")
+	modelName = truncateCodexAffinityPart(modelName, 128)
+	if modelName != "" {
+		q = q.Where("NOT EXISTS (SELECT 1 FROM codex_account_model_states s WHERE s.account_row_id = codex_accounts.id AND s.model = ? AND s.next_retry_time > ?)", modelName, now)
+	}
+	err := q.First(&account).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, errors.New("no enabled Codex account available")
 		}
 		return nil, err
 	}
-	_ = DB.Model(&CodexAccount{}).Where("id = ?", account.Id).Updates(map[string]any{
-		"last_used_time": now,
-		"used_count":     gorm.Expr("used_count + ?", 1),
-		"updated_at":     now,
-	}).Error
 	return &account, nil
 }
 
+func SelectCodexAccountForRelay(sessionKey string, modelName string) (*CodexAccount, error) {
+	now := common.GetTimestamp()
+	var selected *CodexAccount
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		affinityKey := normalizeCodexAffinityKey(sessionKey, modelName)
+		if affinityKey != "" {
+			var affinity CodexAccountAffinity
+			err := tx.Where("session_key = ?", affinityKey).First(&affinity).Error
+			if err == nil && affinity.AccountRowID > 0 {
+				var account CodexAccount
+				q := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+					Where("id = ? AND status = ? AND (next_retry_time = 0 OR next_retry_time <= ?)", affinity.AccountRowID, CodexAccountStatusEnabled, now).
+					Limit(1)
+				modelKey := truncateCodexAffinityPart(modelName, 128)
+				if modelKey != "" {
+					q = q.Where("NOT EXISTS (SELECT 1 FROM codex_account_model_states s WHERE s.account_row_id = codex_accounts.id AND s.model = ? AND s.next_retry_time > ?)", modelKey, now)
+				}
+				err = q.First(&account).Error
+				if err == nil {
+					if err = touchSelectedCodexAccount(tx, &account, now); err != nil {
+						return err
+					}
+					_ = tx.Model(&CodexAccountAffinity{}).Where("id = ?", affinity.Id).Updates(map[string]any{
+						"last_used_time": now,
+						"updated_at":     now,
+					}).Error
+					selected = &account
+					return nil
+				}
+			} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+		}
+
+		account, err := selectAvailableCodexAccountForModel(tx, now, modelName)
+		if err != nil {
+			return err
+		}
+		if err = touchSelectedCodexAccount(tx, account, now); err != nil {
+			return err
+		}
+		if err = bindCodexAccountAffinity(tx, sessionKey, modelName, account.Id, now); err != nil {
+			return err
+		}
+		selected = account
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return selected, nil
+}
+
 func MarkCodexAccountRelayResult(accountID int, success bool, message string, cooldownSeconds int64) {
+	MarkCodexAccountModelRelayResult(accountID, "", success, message, cooldownSeconds, true)
+}
+
+func MarkCodexAccountModelRelayResult(accountID int, modelName string, success bool, message string, cooldownSeconds int64, accountWide bool) {
 	if accountID <= 0 {
 		return
 	}
@@ -231,7 +442,45 @@ func MarkCodexAccountRelayResult(accountID int, success bool, message string, co
 		updates["last_error"] = strings.TrimSpace(message)
 		updates["next_retry_time"] = common.GetTimestamp() + cooldownSeconds
 	}
-	_ = DB.Model(&CodexAccount{}).Where("id = ?", accountID).Updates(updates).Error
+	if accountWide {
+		_ = DB.Model(&CodexAccount{}).Where("id = ?", accountID).Updates(updates).Error
+		if !success {
+			_ = DB.Where("account_row_id = ?", accountID).Delete(&CodexAccountAffinity{}).Error
+		}
+		return
+	}
+
+	modelName = truncateCodexAffinityPart(modelName, 128)
+	if modelName == "" {
+		return
+	}
+	if success {
+		_ = DB.Model(&CodexAccountModelState{}).
+			Where("account_row_id = ? AND model = ?", accountID, modelName).
+			Updates(map[string]any{
+				"next_retry_time": 0,
+				"last_error":      "",
+				"updated_at":      common.GetTimestamp(),
+			}).Error
+		return
+	}
+	state := CodexAccountModelState{
+		AccountRowID:  accountID,
+		Model:         modelName,
+		NextRetryTime: common.GetTimestamp() + cooldownSeconds,
+		FailedCount:   1,
+		LastError:     strings.TrimSpace(message),
+	}
+	_ = DB.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "account_row_id"}, {Name: "model"}},
+		DoUpdates: clause.Assignments(map[string]any{
+			"next_retry_time": state.NextRetryTime,
+			"failed_count":    gorm.Expr("failed_count + ?", 1),
+			"last_error":      state.LastError,
+			"updated_at":      common.GetTimestamp(),
+		}),
+	}).Create(&state).Error
+	_ = DB.Where("account_row_id = ? AND model = ?", accountID, modelName).Delete(&CodexAccountAffinity{}).Error
 }
 
 func parseCodexRFC3339ToUnix(raw string) int64 {

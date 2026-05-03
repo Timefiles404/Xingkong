@@ -288,6 +288,8 @@ func migrateDB() error {
 		&CustomOAuthProvider{},
 		&UserOAuthBinding{},
 		&CodexAccount{},
+		&CodexAccountAffinity{},
+		&CodexAccountModelState{},
 	)
 	if err != nil {
 		return err

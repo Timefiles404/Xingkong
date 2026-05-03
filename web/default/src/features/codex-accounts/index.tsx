@@ -3,6 +3,7 @@ import {
   Download,
   ExternalLink,
   Loader2,
+  Pencil,
   RefreshCw,
   Trash2,
   Upload,
@@ -48,11 +49,21 @@ function formatTime(ts?: number) {
   return new Date(ts * 1000).toLocaleString()
 }
 
+function formatCooldown(ts?: number) {
+  if (!ts) return ''
+  const seconds = Math.max(0, ts - Math.floor(Date.now() / 1000))
+  if (seconds <= 0) return ''
+  if (seconds < 60) return `${seconds}s`
+  if (seconds < 3600) return `${Math.ceil(seconds / 60)}m`
+  return `${Math.ceil(seconds / 3600)}h`
+}
+
 export function CodexAccounts() {
   const [accounts, setAccounts] = useState<CodexAccount[]>([])
   const [loading, setLoading] = useState(false)
   const [oauthOpen, setOAuthOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
+  const [editOpen, setEditOpen] = useState(false)
   const [usageOpen, setUsageOpen] = useState(false)
   const [usageContent, setUsageContent] = useState('')
   const [authUrl, setAuthUrl] = useState('')
@@ -60,6 +71,12 @@ export function CodexAccounts() {
   const [accountName, setAccountName] = useState('')
   const [baseUrl, setBaseUrl] = useState('https://chatgpt.com')
   const [proxy, setProxy] = useState('')
+  const [editingAccount, setEditingAccount] = useState<CodexAccount | null>(null)
+  const [editName, setEditName] = useState('')
+  const [editBaseUrl, setEditBaseUrl] = useState('')
+  const [editProxy, setEditProxy] = useState('')
+  const [editPriority, setEditPriority] = useState('0')
+  const [editNote, setEditNote] = useState('')
   const [importRaw, setImportRaw] = useState('')
   const [busyId, setBusyId] = useState<number | null>(null)
   const enabledCount = useMemo(
@@ -172,6 +189,36 @@ export function CodexAccounts() {
     await load()
   }
 
+  const openEdit = (account: CodexAccount) => {
+    setEditingAccount(account)
+    setEditName(account.name || '')
+    setEditBaseUrl(account.base_url || 'https://chatgpt.com')
+    setEditProxy(account.proxy || '')
+    setEditPriority(String(account.priority || 0))
+    setEditNote(account.note || '')
+    setEditOpen(true)
+  }
+
+  const saveEdit = async () => {
+    if (!editingAccount) return
+    const priority = Number.parseInt(editPriority, 10)
+    const res = await updateCodexAccount(editingAccount.id, {
+      name: editName,
+      base_url: editBaseUrl,
+      proxy: editProxy,
+      priority: Number.isFinite(priority) ? priority : 0,
+      note: editNote,
+    })
+    if (!res.success) {
+      toast.error(res.message || '保存失败')
+      return
+    }
+    toast.success('账号配置已保存')
+    setEditOpen(false)
+    setEditingAccount(null)
+    await load()
+  }
+
   const removeAccount = async (account: CodexAccount) => {
     if (!window.confirm(`确认删除 ${account.email || account.account_id}？`)) return
     await deleteCodexAccount(account.id)
@@ -182,7 +229,7 @@ export function CodexAccounts() {
     <SectionPageLayout>
       <SectionPageLayout.Title>Codex 账号管理</SectionPageLayout.Title>
       <SectionPageLayout.Description>
-        管理 Codex 官方号池。前台只暴露一个 Codex 官方渠道，实际账号从这里轮询选择。
+        管理 Codex 官方号池。前台只暴露一个 Codex 官方渠道，实际账号按会话亲和、优先级和冷却状态选择。
       </SectionPageLayout.Description>
       <SectionPageLayout.Actions>
         <Button variant='outline' onClick={handleExport}>
@@ -220,6 +267,7 @@ export function CodexAccounts() {
                   <TableRow>
                     <TableHead>账号</TableHead>
                     <TableHead>状态</TableHead>
+                    <TableHead>优先级/备注</TableHead>
                     <TableHead>过期时间</TableHead>
                     <TableHead>最近使用</TableHead>
                     <TableHead>请求/失败</TableHead>
@@ -242,6 +290,29 @@ export function CodexAccounts() {
                         <Badge variant={account.status === 1 ? 'default' : 'secondary'}>
                           {account.status === 1 ? '启用' : '停用'}
                         </Badge>
+                        {formatCooldown(account.next_retry_time) && (
+                          <div className='text-destructive mt-1 text-xs'>
+                            冷却 {formatCooldown(account.next_retry_time)}
+                          </div>
+                        )}
+                        {(account.model_states || [])
+                          .filter((item) => formatCooldown(item.next_retry_time))
+                          .slice(0, 2)
+                          .map((item) => (
+                            <div
+                              key={item.id}
+                              className='text-destructive/80 mt-1 max-w-[160px] truncate text-xs'
+                              title={item.last_error || item.model}
+                            >
+                              {item.model} {formatCooldown(item.next_retry_time)}
+                            </div>
+                          ))}
+                      </TableCell>
+                      <TableCell>
+                        <div className='text-sm'>{account.priority || 0}</div>
+                        <div className='text-muted-foreground max-w-[180px] truncate text-xs'>
+                          {account.note || '-'}
+                        </div>
                       </TableCell>
                       <TableCell>{formatTime(account.expired_at)}</TableCell>
                       <TableCell>{formatTime(account.last_used_time)}</TableCell>
@@ -274,6 +345,9 @@ export function CodexAccounts() {
                           onClick={() => toggleStatus(account)}
                         >
                           {account.status === 1 ? '停用' : '启用'}
+                        </Button>
+                        <Button variant='ghost' size='icon' onClick={() => openEdit(account)}>
+                          <Pencil className='h-4 w-4' />
                         </Button>
                         <Button
                           variant='ghost'
@@ -324,6 +398,40 @@ export function CodexAccounts() {
             <Button onClick={handleCompleteOAuth} disabled={!callbackUrl.trim()}>
               保存账号
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent className='sm:max-w-2xl'>
+          <DialogHeader>
+            <DialogTitle>编辑 Codex 账号</DialogTitle>
+          </DialogHeader>
+          <div className='grid gap-3'>
+            <Label>账号备注名</Label>
+            <Input value={editName} onChange={(e) => setEditName(e.target.value)} />
+            <Label>Base URL</Label>
+            <Input value={editBaseUrl} onChange={(e) => setEditBaseUrl(e.target.value)} />
+            <Label>代理 URL</Label>
+            <Input value={editProxy} onChange={(e) => setEditProxy(e.target.value)} />
+            <Label>优先级（数字越大越优先）</Label>
+            <Input
+              value={editPriority}
+              onChange={(e) => setEditPriority(e.target.value)}
+              inputMode='numeric'
+            />
+            <Label>备注</Label>
+            <Textarea
+              className='min-h-[96px]'
+              value={editNote}
+              onChange={(e) => setEditNote(e.target.value)}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant='outline' onClick={() => setEditOpen(false)}>
+              取消
+            </Button>
+            <Button onClick={saveEdit}>保存</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

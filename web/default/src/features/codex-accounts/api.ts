@@ -7,6 +7,8 @@ export type CodexAccount = {
   account_id: string
   base_url: string
   proxy: string
+  priority: number
+  note: string
   status: number
   last_refresh: number
   expired_at: number
@@ -18,6 +20,14 @@ export type CodexAccount = {
   created_at: number
   updated_at: number
   has_refresh_token: boolean
+  model_states?: Array<{
+    id: number
+    account_row_id: number
+    model: string
+    next_retry_time: number
+    failed_count: number
+    last_error: string
+  }>
 }
 
 export async function getCodexAccounts(params: {
@@ -77,7 +87,9 @@ export async function exportCodexAccounts() {
 
 export async function updateCodexAccount(
   id: number,
-  payload: Partial<Pick<CodexAccount, 'name' | 'base_url' | 'proxy' | 'status'>>
+  payload: Partial<
+    Pick<CodexAccount, 'name' | 'base_url' | 'proxy' | 'priority' | 'note' | 'status'>
+  >
 ) {
   const res = await api.put(`/api/codex_account/${id}`, payload)
   return res.data as { success: boolean; message?: string }

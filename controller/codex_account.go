@@ -32,10 +32,12 @@ type codexAccountImportRequest struct {
 }
 
 type codexAccountUpdateRequest struct {
-	Name    *string `json:"name"`
-	BaseURL *string `json:"base_url"`
-	Proxy   *string `json:"proxy"`
-	Status  *int    `json:"status"`
+	Name     *string `json:"name"`
+	BaseURL  *string `json:"base_url"`
+	Proxy    *string `json:"proxy"`
+	Priority *int    `json:"priority"`
+	Note     *string `json:"note"`
+	Status   *int    `json:"status"`
 }
 
 func codexAccountOAuthSessionKey(field string) string {
@@ -164,6 +166,16 @@ func ExportCodexAccounts(c *gin.Context) {
 	for _, account := range accounts {
 		raw := strings.TrimSpace(account.Credential)
 		if raw != "" {
+			if credential, err := model.ParseCodexOAuthCredential(raw); err == nil {
+				credential.Priority = account.Priority
+				credential.Note = account.Note
+				credential.ProxyURL = account.Proxy
+				disabled := account.Status == model.CodexAccountStatusDisabled
+				credential.Disabled = &disabled
+				if encoded, err := common.Marshal(credential); err == nil {
+					raw = string(encoded)
+				}
+			}
 			out = append(out, json.RawMessage(raw))
 		}
 	}
@@ -194,6 +206,12 @@ func UpdateCodexAccount(c *gin.Context) {
 	}
 	if req.Proxy != nil {
 		updates["proxy"] = strings.TrimSpace(*req.Proxy)
+	}
+	if req.Priority != nil {
+		updates["priority"] = *req.Priority
+	}
+	if req.Note != nil {
+		updates["note"] = strings.TrimSpace(*req.Note)
 	}
 	if req.Status != nil {
 		if *req.Status != model.CodexAccountStatusEnabled && *req.Status != model.CodexAccountStatusDisabled {

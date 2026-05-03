@@ -83,6 +83,13 @@ func RefreshCodexAccountCredential(ctx context.Context, accountID int) (*model.C
 			key.Email = email
 		}
 	}
+	key.Priority = account.Priority
+	key.Note = account.Note
+	if strings.TrimSpace(key.ProxyURL) == "" {
+		key.ProxyURL = account.Proxy
+	}
+	disabled := account.Status == model.CodexAccountStatusDisabled
+	key.Disabled = &disabled
 	updated, err := model.UpsertCodexAccountFromOAuthKey(*key, account.Name, account.BaseURL, account.Proxy)
 	if err != nil {
 		return nil, err
@@ -133,6 +140,14 @@ func mapToCodexCredential(m map[string]any) (model.CodexOAuthCredential, bool) {
 		Email:        stringFromAny(m["email"]),
 		Type:         stringFromAny(m["type"]),
 		Expired:      stringFromAny(m["expired"]),
+		Priority:     intFromAny(m["priority"]),
+		Note:         firstNonEmptyString(m["note"], m["remark"], m["remarks"]),
+		ProxyURL:     firstNonEmptyString(m["proxy_url"], m["proxy"], m["proxyURL"]),
+	}
+	if disabled, ok := boolFromAny(m["disabled"]); ok {
+		cred.Disabled = &disabled
+	} else if disabled, ok := boolFromAny(m["is_disabled"]); ok {
+		cred.Disabled = &disabled
 	}
 	if cred.AccessToken == "" || cred.RefreshToken == "" {
 		return model.CodexOAuthCredential{}, false
@@ -163,6 +178,15 @@ func mapToCodexCredential(m map[string]any) (model.CodexOAuthCredential, bool) {
 	return cred, true
 }
 
+func firstNonEmptyString(values ...any) string {
+	for _, v := range values {
+		if s := stringFromAny(v); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
 func stringFromAny(v any) string {
 	if v == nil {
 		return ""
@@ -172,5 +196,54 @@ func stringFromAny(v any) string {
 		return strings.TrimSpace(x)
 	default:
 		return strings.TrimSpace(fmt.Sprintf("%v", x))
+	}
+}
+
+func intFromAny(v any) int {
+	if v == nil {
+		return 0
+	}
+	switch x := v.(type) {
+	case int:
+		return x
+	case int64:
+		return int(x)
+	case float64:
+		return int(x)
+	case json.Number:
+		i, _ := x.Int64()
+		return int(i)
+	case string:
+		var out int
+		_, _ = fmt.Sscanf(strings.TrimSpace(x), "%d", &out)
+		return out
+	default:
+		return 0
+	}
+}
+
+func boolFromAny(v any) (bool, bool) {
+	if v == nil {
+		return false, false
+	}
+	switch x := v.(type) {
+	case bool:
+		return x, true
+	case string:
+		raw := strings.ToLower(strings.TrimSpace(x))
+		switch raw {
+		case "true", "1", "yes", "y", "on", "disabled":
+			return true, true
+		case "false", "0", "no", "n", "off", "enabled":
+			return false, true
+		default:
+			return false, false
+		}
+	case float64:
+		return x != 0, true
+	case int:
+		return x != 0, true
+	default:
+		return false, false
 	}
 }
