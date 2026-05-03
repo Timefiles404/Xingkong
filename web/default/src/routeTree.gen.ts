@@ -45,6 +45,7 @@ import { Route as AuthenticatedModelsIndexRouteImport } from './routes/_authenti
 import { Route as AuthenticatedKeysIndexRouteImport } from './routes/_authenticated/keys/index'
 import { Route as AuthenticatedDashboardIndexRouteImport } from './routes/_authenticated/dashboard/index'
 import { Route as AuthenticatedCodexAccountsIndexRouteImport } from './routes/_authenticated/codex-accounts/index'
+import { Route as AuthenticatedChannelLabIndexRouteImport } from './routes/_authenticated/channel-lab/index'
 import { Route as AuthenticatedChannelsIndexRouteImport } from './routes/_authenticated/channels/index'
 import { Route as AuthenticatedUsageLogsSectionRouteImport } from './routes/_authenticated/usage-logs/$section'
 import { Route as AuthenticatedModelsSectionRouteImport } from './routes/_authenticated/models/$section'
@@ -251,6 +252,12 @@ const AuthenticatedCodexAccountsIndexRoute =
     path: '/codex-accounts/',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedChannelLabIndexRoute =
+  AuthenticatedChannelLabIndexRouteImport.update({
+    id: '/channel-lab/',
+    path: '/channel-lab/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedChannelsIndexRoute =
   AuthenticatedChannelsIndexRouteImport.update({
     id: '/channels/',
@@ -409,6 +416,7 @@ export interface FileRoutesByFullPath {
   '/errors/$error': typeof AuthenticatedErrorsErrorRoute
   '/models/$section': typeof AuthenticatedModelsSectionRoute
   '/usage-logs/$section': typeof AuthenticatedUsageLogsSectionRoute
+  '/channel-lab/': typeof AuthenticatedChannelLabIndexRoute
   '/channels/': typeof AuthenticatedChannelsIndexRoute
   '/codex-accounts/': typeof AuthenticatedCodexAccountsIndexRoute
   '/dashboard/': typeof AuthenticatedDashboardIndexRoute
@@ -465,6 +473,7 @@ export interface FileRoutesByTo {
   '/errors/$error': typeof AuthenticatedErrorsErrorRoute
   '/models/$section': typeof AuthenticatedModelsSectionRoute
   '/usage-logs/$section': typeof AuthenticatedUsageLogsSectionRoute
+  '/channel-lab': typeof AuthenticatedChannelLabIndexRoute
   '/channels': typeof AuthenticatedChannelsIndexRoute
   '/codex-accounts': typeof AuthenticatedCodexAccountsIndexRoute
   '/dashboard': typeof AuthenticatedDashboardIndexRoute
@@ -525,6 +534,7 @@ export interface FileRoutesById {
   '/_authenticated/errors/$error': typeof AuthenticatedErrorsErrorRoute
   '/_authenticated/models/$section': typeof AuthenticatedModelsSectionRoute
   '/_authenticated/usage-logs/$section': typeof AuthenticatedUsageLogsSectionRoute
+  '/_authenticated/channel-lab/': typeof AuthenticatedChannelLabIndexRoute
   '/_authenticated/channels/': typeof AuthenticatedChannelsIndexRoute
   '/_authenticated/codex-accounts/': typeof AuthenticatedCodexAccountsIndexRoute
   '/_authenticated/dashboard/': typeof AuthenticatedDashboardIndexRoute
@@ -584,6 +594,7 @@ export interface FileRouteTypes {
     | '/errors/$error'
     | '/models/$section'
     | '/usage-logs/$section'
+    | '/channel-lab/'
     | '/channels/'
     | '/codex-accounts/'
     | '/dashboard/'
@@ -640,6 +651,7 @@ export interface FileRouteTypes {
     | '/errors/$error'
     | '/models/$section'
     | '/usage-logs/$section'
+    | '/channel-lab'
     | '/channels'
     | '/codex-accounts'
     | '/dashboard'
@@ -699,6 +711,7 @@ export interface FileRouteTypes {
     | '/_authenticated/errors/$error'
     | '/_authenticated/models/$section'
     | '/_authenticated/usage-logs/$section'
+    | '/_authenticated/channel-lab/'
     | '/_authenticated/channels/'
     | '/_authenticated/codex-accounts/'
     | '/_authenticated/dashboard/'
@@ -995,6 +1008,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedDashboardIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/channel-lab/': {
+      id: '/_authenticated/channel-lab/'
+      path: '/channel-lab'
+      fullPath: '/channel-lab/'
+      preLoaderRoute: typeof AuthenticatedChannelLabIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/channels/': {
       id: '/_authenticated/channels/'
       path: '/channels'
@@ -1241,6 +1261,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedErrorsErrorRoute: typeof AuthenticatedErrorsErrorRoute
   AuthenticatedModelsSectionRoute: typeof AuthenticatedModelsSectionRoute
   AuthenticatedUsageLogsSectionRoute: typeof AuthenticatedUsageLogsSectionRoute
+  AuthenticatedChannelLabIndexRoute: typeof AuthenticatedChannelLabIndexRoute
   AuthenticatedChannelsIndexRoute: typeof AuthenticatedChannelsIndexRoute
   AuthenticatedCodexAccountsIndexRoute: typeof AuthenticatedCodexAccountsIndexRoute
   AuthenticatedDashboardIndexRoute: typeof AuthenticatedDashboardIndexRoute
@@ -1265,6 +1286,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedErrorsErrorRoute: AuthenticatedErrorsErrorRoute,
   AuthenticatedModelsSectionRoute: AuthenticatedModelsSectionRoute,
   AuthenticatedUsageLogsSectionRoute: AuthenticatedUsageLogsSectionRoute,
+  AuthenticatedChannelLabIndexRoute: AuthenticatedChannelLabIndexRoute,
   AuthenticatedChannelsIndexRoute: AuthenticatedChannelsIndexRoute,
   AuthenticatedCodexAccountsIndexRoute: AuthenticatedCodexAccountsIndexRoute,
   AuthenticatedDashboardIndexRoute: AuthenticatedDashboardIndexRoute,

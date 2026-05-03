@@ -41,6 +41,31 @@ type testResult struct {
 	context     *gin.Context
 	localErr    error
 	newAPIError *types.NewAPIError
+	detail      *channelLabTestDetail
+}
+
+type channelTestOptions struct {
+	recordLog     bool
+	collectDetail bool
+}
+
+type channelLabTestDetail struct {
+	Model           string `json:"model"`
+	UpstreamModel   string `json:"upstream_model,omitempty"`
+	EndpointType    string `json:"endpoint_type"`
+	RequestPath     string `json:"request_path"`
+	RequestURL      string `json:"request_url,omitempty"`
+	RequestBody     string `json:"request_body,omitempty"`
+	ResponseStatus  int    `json:"response_status,omitempty"`
+	ResponseBody    string `json:"response_body,omitempty"`
+	ErrorCode       string `json:"error_code,omitempty"`
+	ErrorMessage    string `json:"error_message,omitempty"`
+	DurationMS      int64  `json:"duration_ms"`
+	Stream          bool   `json:"stream"`
+	ChannelType     int    `json:"channel_type"`
+	ChannelTypeName string `json:"channel_type_name"`
+	BaseURL         string `json:"base_url"`
+	DetectedBy      string `json:"detected_by"`
 }
 
 func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointType string) string {
@@ -58,7 +83,27 @@ func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointTyp
 }
 
 func testChannel(channel *model.Channel, testModel string, endpointType string, isStream bool) testResult {
+	return testChannelWithOptions(channel, testModel, endpointType, isStream, channelTestOptions{recordLog: true})
+}
+
+func testChannelWithOptions(channel *model.Channel, testModel string, endpointType string, isStream bool, options channelTestOptions) testResult {
 	tik := time.Now()
+	var detail *channelLabTestDetail
+	if options.collectDetail {
+		detectedBy := "manual"
+		if strings.TrimSpace(endpointType) == "" {
+			detectedBy = "auto"
+		}
+		detail = &channelLabTestDetail{
+			Model:           strings.TrimSpace(testModel),
+			EndpointType:    strings.TrimSpace(endpointType),
+			Stream:          isStream,
+			ChannelType:     channel.Type,
+			ChannelTypeName: constant.GetChannelTypeName(channel.Type),
+			BaseURL:         channel.GetBaseURL(),
+			DetectedBy:      detectedBy,
+		}
+	}
 	var unsupportedTestChannelTypes = []int{
 		constant.ChannelTypeMidjourney,
 		constant.ChannelTypeMidjourneyPlus,
@@ -72,6 +117,7 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 		channelTypeName := constant.GetChannelTypeName(channel.Type)
 		return testResult{
 			localErr: fmt.Errorf("%s channel test is not supported", channelTypeName),
+			detail:   detail,
 		}
 	}
 	w := httptest.NewRecorder()
@@ -93,6 +139,13 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 	}
 
 	endpointType = normalizeChannelTestEndpoint(channel, testModel, endpointType)
+	if detail != nil {
+		detail.Model = testModel
+		detail.EndpointType = endpointType
+		if detail.EndpointType == "" {
+			detail.EndpointType = "auto"
+		}
+	}
 
 	requestPath := "/v1/chat/completions"
 
@@ -134,6 +187,9 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 	}
 	if strings.HasPrefix(requestPath, "/v1/responses/compact") {
 		testModel = ratio_setting.WithCompactModelSuffix(testModel)
+	}
+	if detail != nil {
+		detail.RequestPath = requestPath
 	}
 
 	c.Request = &http.Request{
@@ -253,6 +309,9 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 	}
 
 	testModel = info.UpstreamModelName
+	if detail != nil {
+		detail.UpstreamModel = testModel
+	}
 	// 更新请求中的模型名称
 	request.SetModelName(testModel)
 
@@ -280,16 +339,31 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 	//logInfo.ApiKey = ""
 	common.SysLog(fmt.Sprintf("testing channel %d with model %s , info %+v ", channel.Id, testModel, info.ToString()))
 
-	priceData, err := helper.ModelPriceHelper(c, info, 0, request.GetTokenCountMeta())
-	if err != nil {
-		return testResult{
-			context:     c,
-			localErr:    err,
-			newAPIError: types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithStatusCode(http.StatusBadRequest)),
+	priceData := types.PriceData{
+		ModelRatio:      1,
+		CompletionRatio: 1,
+		GroupRatioInfo:  types.GroupRatioInfo{GroupRatio: 1},
+	}
+	if options.recordLog {
+		priceData, err = helper.ModelPriceHelper(c, info, 0, request.GetTokenCountMeta())
+		if err != nil {
+			return testResult{
+				context:     c,
+				localErr:    err,
+				newAPIError: types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithStatusCode(http.StatusBadRequest)),
+				detail:      detail,
+			}
 		}
 	}
 
 	adaptor.Init(info)
+	if detail != nil {
+		if requestURL, urlErr := adaptor.GetRequestURL(info); urlErr == nil {
+			detail.RequestURL = requestURL
+		} else {
+			detail.RequestURL = "获取请求 URL 失败: " + urlErr.Error()
+		}
+	}
 
 	var convertedRequest any
 	// 根据 RelayMode 选择正确的转换函数
@@ -412,21 +486,38 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 			}
 		}
 	}
+	if detail != nil {
+		detail.RequestBody = string(jsonData)
+	}
 
 	requestBody := bytes.NewBuffer(jsonData)
 	c.Request.Body = io.NopCloser(bytes.NewBuffer(jsonData))
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {
+		if detail != nil {
+			detail.ErrorMessage = err.Error()
+			detail.ErrorCode = string(types.ErrorCodeDoRequestFailed)
+			detail.DurationMS = time.Since(tik).Milliseconds()
+		}
 		return testResult{
 			context:     c,
 			localErr:    err,
 			newAPIError: types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError),
+			detail:      detail,
 		}
 	}
 	var httpResp *http.Response
 	if resp != nil {
 		httpResp = resp.(*http.Response)
+		if detail != nil {
+			detail.ResponseStatus = httpResp.StatusCode
+		}
 		if httpResp.StatusCode != http.StatusOK {
+			if detail != nil && httpResp.Body != nil {
+				bodyBytes, _ := io.ReadAll(io.LimitReader(httpResp.Body, 1<<20))
+				detail.ResponseBody = string(bodyBytes)
+				httpResp.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+			}
 			err := service.RelayErrorHandler(c.Request.Context(), httpResp, true)
 			common.SysError(fmt.Sprintf(
 				"channel test bad response: channel_id=%d name=%s type=%d model=%s endpoint_type=%s status=%d err=%v",
@@ -442,66 +533,100 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 				context:     c,
 				localErr:    err,
 				newAPIError: types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError),
+				detail:      detail,
 			}
 		}
 	}
 	usageA, respErr := adaptor.DoResponse(c, httpResp, info)
 	if respErr != nil {
+		if detail != nil {
+			detail.ErrorMessage = respErr.Error()
+			detail.ErrorCode = string(respErr.GetErrorCode())
+			detail.DurationMS = time.Since(tik).Milliseconds()
+		}
 		return testResult{
 			context:     c,
 			localErr:    respErr,
 			newAPIError: respErr,
+			detail:      detail,
 		}
 	}
 	usage, usageErr := coerceTestUsage(usageA, isStream, info.GetEstimatePromptTokens())
 	if usageErr != nil {
+		if detail != nil {
+			detail.ErrorMessage = usageErr.Error()
+			detail.ErrorCode = string(types.ErrorCodeBadResponseBody)
+			detail.DurationMS = time.Since(tik).Milliseconds()
+		}
 		return testResult{
 			context:     c,
 			localErr:    usageErr,
 			newAPIError: types.NewOpenAIError(usageErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError),
+			detail:      detail,
 		}
 	}
 	result := w.Result()
 	respBody, err := readTestResponseBody(result.Body, isStream)
 	if err != nil {
+		if detail != nil {
+			detail.ErrorMessage = err.Error()
+			detail.ErrorCode = string(types.ErrorCodeReadResponseBodyFailed)
+			detail.DurationMS = time.Since(tik).Milliseconds()
+		}
 		return testResult{
 			context:     c,
 			localErr:    err,
 			newAPIError: types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError),
+			detail:      detail,
 		}
 	}
+	if detail != nil {
+		detail.ResponseBody = string(respBody)
+	}
 	if bodyErr := validateTestResponseBody(respBody, isStream); bodyErr != nil {
+		if detail != nil {
+			detail.ErrorMessage = bodyErr.Error()
+			detail.ErrorCode = string(types.ErrorCodeBadResponseBody)
+			detail.DurationMS = time.Since(tik).Milliseconds()
+		}
 		return testResult{
 			context:     c,
 			localErr:    bodyErr,
 			newAPIError: types.NewOpenAIError(bodyErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError),
+			detail:      detail,
 		}
 	}
 	info.SetEstimatePromptTokens(usage.PromptTokens)
 
-	quota, tieredResult := settleTestQuota(info, priceData, usage)
 	tok := time.Now()
 	milliseconds := tok.Sub(tik).Milliseconds()
 	consumedTime := float64(milliseconds) / 1000.0
-	other := buildTestLogOther(c, info, priceData, usage, tieredResult)
-	model.RecordConsumeLog(c, 1, model.RecordConsumeLogParams{
-		ChannelId:        channel.Id,
-		PromptTokens:     usage.PromptTokens,
-		CompletionTokens: usage.CompletionTokens,
-		ModelName:        info.OriginModelName,
-		TokenName:        "模型测试",
-		Quota:            quota,
-		Content:          "模型测试",
-		UseTimeSeconds:   int(consumedTime),
-		IsStream:         info.IsStream,
-		Group:            info.UsingGroup,
-		Other:            other,
-	})
+	if options.recordLog {
+		quota, tieredResult := settleTestQuota(info, priceData, usage)
+		other := buildTestLogOther(c, info, priceData, usage, tieredResult)
+		model.RecordConsumeLog(c, 1, model.RecordConsumeLogParams{
+			ChannelId:        channel.Id,
+			PromptTokens:     usage.PromptTokens,
+			CompletionTokens: usage.CompletionTokens,
+			ModelName:        info.OriginModelName,
+			TokenName:        "模型测试",
+			Quota:            quota,
+			Content:          "模型测试",
+			UseTimeSeconds:   int(consumedTime),
+			IsStream:         info.IsStream,
+			Group:            info.UsingGroup,
+			Other:            other,
+		})
+	}
 	common.SysLog(fmt.Sprintf("testing channel #%d, response: \n%s", channel.Id, string(respBody)))
+	if detail != nil {
+		detail.DurationMS = milliseconds
+	}
 	return testResult{
 		context:     c,
 		localErr:    nil,
 		newAPIError: nil,
+		detail:      detail,
 	}
 }
 

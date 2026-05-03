@@ -278,6 +278,13 @@ func SetApiRouter(router *gin.Engine) {
 			codexAccountRoute.POST("/:id/refresh", controller.RefreshCodexAccount)
 			codexAccountRoute.GET("/:id/usage", controller.GetCodexAccountUsage)
 		}
+		channelLabRoute := apiRouter.Group("/channel_lab")
+		channelLabRoute.Use(middleware.AdminAuth())
+		{
+			channelLabRoute.POST("/fetch_models", controller.FetchModels)
+			channelLabRoute.POST("/test", controller.ChannelLabTest)
+			channelLabRoute.POST("/test_all", controller.ChannelLabTestAll)
+		}
 		tokenRoute := apiRouter.Group("/token")
 		tokenRoute.Use(middleware.UserAuth())
 		{

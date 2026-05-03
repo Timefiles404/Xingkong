@@ -97,6 +97,11 @@ export function useSidebarData(): SidebarData {
             icon: Radio,
           },
           {
+            title: t('渠道测试场'),
+            url: '/channel-lab',
+            icon: FlaskConical,
+          },
+          {
             title: t('Codex 账号管理'),
             url: '/codex-accounts',
             icon: Bot,
