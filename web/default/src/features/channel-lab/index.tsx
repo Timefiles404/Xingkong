@@ -32,7 +32,6 @@ import { Textarea } from '@/components/ui/textarea'
 import { CHANNEL_TYPE_OPTIONS } from '@/features/channels/constants'
 import {
   fetchChannelLabModels,
-  testAllChannelLabModels,
   testChannelLabModel,
   type ChannelLabAttempt,
   type ChannelLabPayload,
@@ -66,6 +65,14 @@ function resultKey(item: ChannelLabTestResult) {
   return `${item.model}:${item.endpoint_type}:${item.success ? 'ok' : 'fail'}`
 }
 
+type TestStatus = 'pending' | 'running' | 'success' | 'failed'
+
+function clampConcurrency(value: string) {
+  const parsed = Number.parseInt(value, 10)
+  if (!Number.isFinite(parsed)) return 4
+  return Math.min(20, Math.max(1, parsed))
+}
+
 export function ChannelLab() {
   const [type, setType] = useState(1)
   const [baseUrl, setBaseUrl] = useState('')
@@ -77,9 +84,12 @@ export function ChannelLab() {
   const [models, setModels] = useState<string[]>([])
   const [manualModels, setManualModels] = useState('')
   const [selectedModel, setSelectedModel] = useState('')
+  const [concurrency, setConcurrency] = useState('4')
   const [fetching, setFetching] = useState(false)
   const [testingModel, setTestingModel] = useState('')
   const [testingAll, setTestingAll] = useState(false)
+  const [testingModels, setTestingModels] = useState<Set<string>>(() => new Set())
+  const [testStatuses, setTestStatuses] = useState<Record<string, TestStatus>>({})
   const [successResults, setSuccessResults] = useState<ChannelLabTestResult[]>([])
   const [failedResults, setFailedResults] = useState<ChannelLabTestResult[]>([])
   const [detail, setDetail] = useState<ChannelLabTestResult | null>(null)
@@ -141,14 +151,28 @@ export function ChannelLab() {
       return
     }
     setTestingModel(modelName)
+    setTestingModels((prev) => new Set(prev).add(modelName))
+    setTestStatuses((prev) => ({ ...prev, [modelName]: 'running' }))
     try {
       const res = await testChannelLabModel({ ...basePayload(), model: modelName })
       upsertResult(res)
+      setTestStatuses((prev) => ({
+        ...prev,
+        [modelName]: res.success ? 'success' : 'failed',
+      }))
       setDetail(res)
     } catch (error) {
+      const failed = buildLocalFailedResult(modelName, error)
+      upsertResult(failed)
+      setTestStatuses((prev) => ({ ...prev, [modelName]: 'failed' }))
       toast.error(error instanceof Error ? error.message : '测试失败')
     } finally {
       setTestingModel('')
+      setTestingModels((prev) => {
+        const next = new Set(prev)
+        next.delete(modelName)
+        return next
+      })
     }
   }
 
@@ -157,22 +181,58 @@ export function ChannelLab() {
       toast.error('请先拉取或手动填写模型')
       return
     }
+    const payload = basePayload()
+    const queue = [...mergedModels]
+    const workerCount = Math.min(clampConcurrency(concurrency), queue.length)
+    let cursor = 0
+    let successCount = 0
+    let failedCount = 0
+
+    setSuccessResults([])
+    setFailedResults([])
+    setDetail(null)
+    setTestStatuses(
+      Object.fromEntries(queue.map((modelName) => [modelName, 'pending' as TestStatus]))
+    )
     setTestingAll(true)
     try {
-      const res = await testAllChannelLabModels({
-        ...basePayload(),
-        models: mergedModels,
-      })
-      if (!res.success) throw new Error(res.message || '批量测试失败')
-      setSuccessResults(res.data?.success || [])
-      setFailedResults(res.data?.failed || [])
-      toast.success(
-        `测试完成：成功 ${res.data?.success?.length || 0}，失败 ${res.data?.failed?.length || 0}`
+      await Promise.all(
+        Array.from({ length: workerCount }, async () => {
+          while (cursor < queue.length) {
+            const modelName = queue[cursor]
+            cursor += 1
+            setTestingModels((prev) => new Set(prev).add(modelName))
+            setTestStatuses((prev) => ({ ...prev, [modelName]: 'running' }))
+            try {
+              const res = await testChannelLabModel({ ...payload, model: modelName })
+              upsertResult(res)
+              if (res.success) successCount += 1
+              else failedCount += 1
+              setTestStatuses((prev) => ({
+                ...prev,
+                [modelName]: res.success ? 'success' : 'failed',
+              }))
+            } catch (error) {
+              const failed = buildLocalFailedResult(modelName, error)
+              upsertResult(failed)
+              failedCount += 1
+              setTestStatuses((prev) => ({ ...prev, [modelName]: 'failed' }))
+            } finally {
+              setTestingModels((prev) => {
+                const next = new Set(prev)
+                next.delete(modelName)
+                return next
+              })
+            }
+          }
+        })
       )
+      toast.success(`测试完成：成功 ${successCount}，失败 ${failedCount}`)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '批量测试失败')
     } finally {
       setTestingAll(false)
+      setTestingModels(new Set())
     }
   }
 
@@ -241,6 +301,16 @@ export function ChannelLab() {
                     </SelectContent>
                   </Select>
                 </div>
+              </div>
+              <div className='space-y-2'>
+                <Label>批量测试并发数</Label>
+                <Input
+                  value={concurrency}
+                  onChange={(event) => setConcurrency(event.target.value)}
+                  onBlur={() => setConcurrency(String(clampConcurrency(concurrency)))}
+                  inputMode='numeric'
+                  placeholder='1-20'
+                />
               </div>
               <div className='flex flex-wrap gap-4 text-sm'>
                 <label className='flex items-center gap-2'>
@@ -328,7 +398,12 @@ export function ChannelLab() {
                             : 'hover:bg-accent'
                         }`}
                       >
-                        {modelName}
+                        <span className='break-all'>{modelName}</span>
+                        {testStatuses[modelName] && (
+                          <span className='mt-1 block'>
+                            <StatusBadge status={testStatuses[modelName]} />
+                          </span>
+                        )}
                       </button>
                     ))}
                   </div>
@@ -336,12 +411,28 @@ export function ChannelLab() {
               </CardContent>
             </Card>
 
+            {Object.keys(testStatuses).length > 0 && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className='flex items-center justify-between'>
+                    <span>实时测试状态</span>
+                    <Badge variant='secondary'>
+                      {testingModels.size} 个正在测试，并发 {clampConcurrency(concurrency)}
+                    </Badge>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <StatusSummary statuses={testStatuses} />
+                </CardContent>
+              </Card>
+            )}
+
             <div className='grid gap-4 lg:grid-cols-2'>
               <ResultColumn
                 title='成功模型'
                 tone='success'
                 items={successResults}
-                busyModel={testingModel}
+                busyModels={testingModels}
                 onOpen={setDetail}
                 onRetest={handleTestModel}
               />
@@ -349,7 +440,7 @@ export function ChannelLab() {
                 title='失败模型'
                 tone='danger'
                 items={failedResults}
-                busyModel={testingModel}
+                busyModels={testingModels}
                 onOpen={setDetail}
                 onRetest={handleTestModel}
               />
@@ -377,18 +468,110 @@ export function ChannelLab() {
   )
 }
 
+function buildLocalFailedResult(modelName: string, error: unknown): ChannelLabTestResult {
+  const message = error instanceof Error ? error.message : '测试失败'
+  return {
+    success: false,
+    model: modelName,
+    endpoint_type: 'local',
+    message,
+    time: 0,
+    detail: {
+      model: modelName,
+      endpoint_type: 'local',
+      request_path: '-',
+      error_message: message,
+      duration_ms: 0,
+      stream: false,
+      channel_type: 0,
+      channel_type_name: '-',
+      base_url: '-',
+      detected_by: 'local',
+    },
+  }
+}
+
+function StatusBadge({ status }: { status: TestStatus }) {
+  if (status === 'running') {
+    return (
+      <Badge variant='outline' className='gap-1'>
+        <Loader2 className='h-3 w-3 animate-spin' />
+        测试中
+      </Badge>
+    )
+  }
+  if (status === 'success') return <Badge variant='default'>成功</Badge>
+  if (status === 'failed') return <Badge variant='destructive'>失败</Badge>
+  return <Badge variant='secondary'>等待</Badge>
+}
+
+function StatusSummary({ statuses }: { statuses: Record<string, TestStatus> }) {
+  const entries = Object.entries(statuses)
+  const counts = entries.reduce(
+    (acc, [, status]) => {
+      acc[status] += 1
+      return acc
+    },
+    { pending: 0, running: 0, success: 0, failed: 0 } as Record<TestStatus, number>
+  )
+  const running = entries.filter(([, status]) => status === 'running').map(([name]) => name)
+  const pending = entries.filter(([, status]) => status === 'pending').map(([name]) => name)
+
+  return (
+    <div className='space-y-3'>
+      <div className='flex flex-wrap gap-2'>
+        <Badge variant='secondary'>等待 {counts.pending}</Badge>
+        <Badge variant='outline'>测试中 {counts.running}</Badge>
+        <Badge variant='default'>成功 {counts.success}</Badge>
+        <Badge variant='destructive'>失败 {counts.failed}</Badge>
+      </div>
+      <div className='grid gap-3 md:grid-cols-2'>
+        <StatusList title='正在测试' items={running} empty='暂无正在测试的模型' />
+        <StatusList title='等待队列' items={pending.slice(0, 80)} empty='暂无等待模型' />
+      </div>
+    </div>
+  )
+}
+
+function StatusList({
+  title,
+  items,
+  empty,
+}: {
+  title: string
+  items: string[]
+  empty: string
+}) {
+  return (
+    <div className='rounded-lg border p-3'>
+      <div className='mb-2 text-sm font-medium'>{title}</div>
+      {items.length === 0 ? (
+        <div className='text-muted-foreground text-xs'>{empty}</div>
+      ) : (
+        <div className='max-h-32 space-y-1 overflow-auto pr-1'>
+          {items.map((item) => (
+            <div key={item} className='bg-muted/60 rounded px-2 py-1 font-mono text-xs'>
+              {item}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ResultColumn({
   title,
   tone,
   items,
-  busyModel,
+  busyModels,
   onOpen,
   onRetest,
 }: {
   title: string
   tone: 'success' | 'danger'
   items: ChannelLabTestResult[]
-  busyModel: string
+  busyModels: Set<string>
   onOpen: (item: ChannelLabTestResult) => void
   onRetest: (model: string) => void
 }) {
@@ -439,9 +622,9 @@ function ResultColumn({
                   size='sm'
                   variant='ghost'
                   onClick={() => onRetest(item.model)}
-                  disabled={busyModel === item.model}
+                  disabled={busyModels.has(item.model)}
                 >
-                  {busyModel === item.model && <Loader2 className='h-3 w-3 animate-spin' />}
+                  {busyModels.has(item.model) && <Loader2 className='h-3 w-3 animate-spin' />}
                   再测一次
                 </Button>
               </div>
