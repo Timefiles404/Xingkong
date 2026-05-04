@@ -724,12 +724,11 @@ export function CodexAccounts() {
                             </Button>
                             <Button
                               variant='ghost'
-                              size='sm'
+                              size='icon'
                               disabled={busyId === account.id}
                               onClick={() => openEditAccount(account)}
                             >
-                              <Pencil className='mr-1 h-3.5 w-3.5' />
-                              修改
+                              <Pencil className='h-4 w-4' />
                             </Button>
                             <Button
                               variant='ghost'
@@ -974,73 +973,73 @@ export function CodexAccounts() {
             </TabsContent>
           )}
         </Tabs>
+
+        <Dialog open={editOpen} onOpenChange={setEditOpen}>
+          <DialogContent className='sm:max-w-2xl'>
+            <DialogHeader>
+              <DialogTitle>编辑 Codex 账号</DialogTitle>
+            </DialogHeader>
+            <div className='grid gap-3'>
+              <Label>账号备注名</Label>
+              <Input value={editName} onChange={(e) => setEditName(e.target.value)} />
+              <Label>Base URL</Label>
+              <Input value={editBaseUrl} onChange={(e) => setEditBaseUrl(e.target.value)} />
+              <Label>代理 URL</Label>
+              <Input value={editProxy} onChange={(e) => setEditProxy(e.target.value)} />
+              <Label>优先级（数字越大越优先）</Label>
+              <Input value={editPriority} onChange={(e) => setEditPriority(e.target.value)} />
+              <Label>备注</Label>
+              <Textarea value={editNote} onChange={(e) => setEditNote(e.target.value)} />
+            </div>
+            <DialogFooter>
+              <Button variant='outline' onClick={() => setEditOpen(false)}>
+                取消
+              </Button>
+              <Button onClick={saveAccount} disabled={savingAccount}>
+                {savingAccount ? <Loader2 className='mr-2 h-4 w-4 animate-spin' /> : null}
+                保存
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={!!editKey} onOpenChange={(open) => !open && setEditKey(null)}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>编辑分发密钥</DialogTitle>
+            </DialogHeader>
+            <Label>名称</Label>
+            <Input value={editKeyName} onChange={(e) => setEditKeyName(e.target.value)} />
+            <Label>剩余托管额度（USD 面值）</Label>
+            <Input value={editKeyUsd} onChange={(e) => setEditKeyUsd(e.target.value)} />
+            <label className='flex items-center gap-2 text-sm'>
+              <input
+                type='checkbox'
+                checked={editKeyUnlimited}
+                onChange={(e) => setEditKeyUnlimited(e.target.checked)}
+              />
+              不限制该 key 托管额度
+            </label>
+            <DialogFooter>
+              <Button variant='outline' onClick={() => setEditKey(null)}>
+                取消
+              </Button>
+              <Button onClick={saveKey}>保存</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={usageOpen} onOpenChange={setUsageOpen}>
+          <DialogContent className='max-h-[85vh] overflow-y-auto sm:max-w-3xl'>
+            <DialogHeader>
+              <DialogTitle>Codex 上游用量</DialogTitle>
+            </DialogHeader>
+            <pre className='bg-muted max-h-[60vh] overflow-auto rounded-md p-3 text-xs'>
+              {usageContent}
+            </pre>
+          </DialogContent>
+        </Dialog>
       </SectionPageLayout.Content>
-
-      <Dialog open={editOpen} onOpenChange={setEditOpen}>
-        <DialogContent className='sm:max-w-2xl'>
-          <DialogHeader>
-            <DialogTitle>编辑 Codex 账号</DialogTitle>
-          </DialogHeader>
-          <div className='grid gap-3'>
-            <Label>账号备注名</Label>
-            <Input value={editName} onChange={(e) => setEditName(e.target.value)} />
-            <Label>Base URL</Label>
-            <Input value={editBaseUrl} onChange={(e) => setEditBaseUrl(e.target.value)} />
-            <Label>代理 URL</Label>
-            <Input value={editProxy} onChange={(e) => setEditProxy(e.target.value)} />
-            <Label>优先级（数字越大越优先）</Label>
-            <Input value={editPriority} onChange={(e) => setEditPriority(e.target.value)} />
-            <Label>备注</Label>
-            <Textarea value={editNote} onChange={(e) => setEditNote(e.target.value)} />
-          </div>
-          <DialogFooter>
-            <Button variant='outline' onClick={() => setEditOpen(false)}>
-              取消
-            </Button>
-            <Button onClick={saveAccount} disabled={savingAccount}>
-              {savingAccount ? <Loader2 className='mr-2 h-4 w-4 animate-spin' /> : null}
-              保存
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={!!editKey} onOpenChange={(open) => !open && setEditKey(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>编辑分发密钥</DialogTitle>
-          </DialogHeader>
-          <Label>名称</Label>
-          <Input value={editKeyName} onChange={(e) => setEditKeyName(e.target.value)} />
-          <Label>剩余托管额度（USD 面值）</Label>
-          <Input value={editKeyUsd} onChange={(e) => setEditKeyUsd(e.target.value)} />
-          <label className='flex items-center gap-2 text-sm'>
-            <input
-              type='checkbox'
-              checked={editKeyUnlimited}
-              onChange={(e) => setEditKeyUnlimited(e.target.checked)}
-            />
-            不限制该 key 托管额度
-          </label>
-          <DialogFooter>
-            <Button variant='outline' onClick={() => setEditKey(null)}>
-              取消
-            </Button>
-            <Button onClick={saveKey}>保存</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={usageOpen} onOpenChange={setUsageOpen}>
-        <DialogContent className='max-h-[85vh] overflow-y-auto sm:max-w-3xl'>
-          <DialogHeader>
-            <DialogTitle>Codex 上游用量</DialogTitle>
-          </DialogHeader>
-          <pre className='bg-muted max-h-[60vh] overflow-auto rounded-md p-3 text-xs'>
-            {usageContent}
-          </pre>
-        </DialogContent>
-      </Dialog>
     </SectionPageLayout>
   )
 }
