@@ -23,14 +23,14 @@ type codexAccountOAuthCompleteRequest struct {
 	Name        string `json:"name"`
 	BaseURL     string `json:"base_url"`
 	Proxy       string `json:"proxy"`
-	OwnerUserID int    `json:"owner_user_id"`
+	OwnerUserID *int   `json:"owner_user_id"`
 }
 
 type codexAccountImportRequest struct {
 	Raw         string `json:"raw"`
 	BaseURL     string `json:"base_url"`
 	Proxy       string `json:"proxy"`
-	OwnerUserID int    `json:"owner_user_id"`
+	OwnerUserID *int   `json:"owner_user_id"`
 }
 
 type codexAccountUpdateRequest struct {
@@ -82,6 +82,23 @@ func codexOwnerFromRequest(c *gin.Context, requested int, isAdmin bool, fallback
 	queryOwner, _ := strconv.Atoi(c.Query("owner_user_id"))
 	if queryOwner > 0 {
 		return queryOwner
+	}
+	return 0
+}
+
+func codexOwnerForAccountMutation(c *gin.Context, requested *int, accountID string, isAdmin bool, fallback int) int {
+	if !isAdmin {
+		return fallback
+	}
+	if requested != nil {
+		return *requested
+	}
+	queryOwner, _ := strconv.Atoi(c.Query("owner_user_id"))
+	if queryOwner > 0 {
+		return queryOwner
+	}
+	if existingOwner, ok := model.GetCodexAccountOwnerByAccountID(accountID); ok {
+		return existingOwner
 	}
 	return 0
 }
@@ -212,7 +229,7 @@ func CompleteCodexAccountOAuth(c *gin.Context) {
 	if !ok {
 		return
 	}
-	ownerUserID = codexOwnerFromRequest(c, req.OwnerUserID, isAdmin, ownerUserID)
+	ownerUserID = codexOwnerForAccountMutation(c, req.OwnerUserID, credential.AccountID, isAdmin, ownerUserID)
 	account, err := model.UpsertCodexAccountFromOAuthKeyForOwner(*credential, req.Name, req.BaseURL, req.Proxy, ownerUserID)
 	if err != nil {
 		common.ApiError(c, err)
@@ -240,14 +257,21 @@ func ImportCodexAccounts(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
-	ownerUserID = codexOwnerFromRequest(c, req.OwnerUserID, isAdmin, ownerUserID)
 	imported := 0
+	failures := make([]string, 0)
 	for _, credential := range credentials {
-		if _, err := model.UpsertCodexAccountFromOAuthKeyForOwner(credential, "", req.BaseURL, req.Proxy, ownerUserID); err == nil {
+		targetOwnerID := codexOwnerForAccountMutation(c, req.OwnerUserID, credential.AccountID, isAdmin, ownerUserID)
+		if _, err := model.UpsertCodexAccountFromOAuthKeyForOwner(credential, "", req.BaseURL, req.Proxy, targetOwnerID); err == nil {
 			imported++
+		} else {
+			failures = append(failures, fmt.Sprintf("%s: %s", credential.AccountID, err.Error()))
 		}
 	}
-	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"imported": imported, "total": len(credentials)}})
+	c.JSON(http.StatusOK, gin.H{
+		"success": len(failures) == 0,
+		"message": strings.Join(failures, "\n"),
+		"data":    gin.H{"imported": imported, "total": len(credentials), "failures": failures},
+	})
 }
 
 func ExportCodexAccounts(c *gin.Context) {

@@ -112,6 +112,7 @@ export function CodexAccounts() {
   const [authUrl, setAuthUrl] = useState('')
   const [callbackUrl, setCallbackUrl] = useState('')
   const [accountName, setAccountName] = useState('')
+  const [oauthOwnerOverride, setOAuthOwnerOverride] = useState<number | undefined>(undefined)
   const [baseUrl, setBaseUrl] = useState('https://chatgpt.com')
   const [proxy, setProxy] = useState('')
   const [importRaw, setImportRaw] = useState('')
@@ -133,6 +134,7 @@ export function CodexAccounts() {
   const isAdmin = !!access?.is_admin
   const canUse = !!access && (access.is_admin || access.is_subagent)
   const ownerForRequest = isAdmin && selectedOwner >= 0 ? selectedOwner : undefined
+  const ownerForOAuth = oauthOwnerOverride ?? ownerForRequest
 
   const enabledCount = useMemo(
     () => accounts.filter((item) => item.status === 1).length,
@@ -191,7 +193,7 @@ export function CodexAccounts() {
       name: accountName,
       base_url: baseUrl,
       proxy,
-      owner_user_id: ownerForRequest,
+      owner_user_id: ownerForOAuth,
     })
     if (!res.success) {
       toast.error(res.message || '保存失败')
@@ -201,6 +203,8 @@ export function CodexAccounts() {
     setOAuthOpen(false)
     setCallbackUrl('')
     setAccountName('')
+    setAuthUrl('')
+    setOAuthOwnerOverride(undefined)
     await load()
   }
 
@@ -329,6 +333,16 @@ export function CodexAccounts() {
     setEditOpen(true)
   }
 
+  const openReauthorizeAccount = (account: CodexAccount) => {
+    setAccountName(account.name || account.email || account.account_id || '')
+    setBaseUrl(account.base_url || 'https://chatgpt.com')
+    setProxy(account.proxy || '')
+    setCallbackUrl('')
+    setAuthUrl('')
+    setOAuthOwnerOverride(account.owner_user_id)
+    setOAuthOpen(true)
+  }
+
   const saveAccount = async () => {
     if (!editingAccount) return
     const priority = Number.parseInt(editPriority, 10)
@@ -452,17 +466,39 @@ export function CodexAccounts() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
-        <Dialog open={oauthOpen} onOpenChange={setOAuthOpen}>
+        <Dialog
+          open={oauthOpen}
+          onOpenChange={(open) => {
+            setOAuthOpen(open)
+            if (!open) {
+              setOAuthOwnerOverride(undefined)
+              setAuthUrl('')
+              setCallbackUrl('')
+            }
+          }}
+        >
           <DialogTrigger asChild>
-            <Button type='button'>
+            <Button
+              type='button'
+              onClick={() => {
+                setOAuthOwnerOverride(undefined)
+                setAccountName('')
+                setAuthUrl('')
+                setCallbackUrl('')
+              }}
+            >
               <ExternalLink className='mr-2 h-4 w-4' />
               添加 OAuth 账号
             </Button>
           </DialogTrigger>
           <DialogContent className='sm:max-w-2xl'>
             <DialogHeader>
-              <DialogTitle>添加 Codex OAuth 账号</DialogTitle>
-              <DialogDescription>登录完成后把完整回调 URL 粘贴回来保存。</DialogDescription>
+              <DialogTitle>
+                {oauthOwnerOverride === undefined ? '添加 Codex OAuth 账号' : '重新授权 Codex 账号'}
+              </DialogTitle>
+              <DialogDescription>
+                登录完成后把完整回调 URL 粘贴回来保存。重新授权会按相同 account_id 更新原账号 token。
+              </DialogDescription>
             </DialogHeader>
             <div className='space-y-3'>
               <Label>账号备注</Label>
@@ -590,6 +626,13 @@ export function CodexAccounts() {
                               }}
                             >
                               刷新
+                            </Button>
+                            <Button
+                              variant='ghost'
+                              size='sm'
+                              onClick={() => openReauthorizeAccount(account)}
+                            >
+                              重授权
                             </Button>
                             <Button
                               variant='ghost'

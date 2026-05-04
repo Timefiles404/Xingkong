@@ -90,7 +90,7 @@ func RefreshCodexAccountCredential(ctx context.Context, accountID int) (*model.C
 	}
 	disabled := account.Status == model.CodexAccountStatusDisabled
 	key.Disabled = &disabled
-	updated, err := model.UpsertCodexAccountFromOAuthKey(*key, account.Name, account.BaseURL, account.Proxy)
+	updated, err := model.UpsertCodexAccountFromOAuthKeyForOwner(*key, account.Name, account.BaseURL, account.Proxy, account.OwnerUserID)
 	if err != nil {
 		return nil, err
 	}

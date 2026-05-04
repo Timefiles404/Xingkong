@@ -209,6 +209,9 @@ func CodexOfficialModelList() []string {
 }
 
 func GetCodexPoolChannel() (*Channel, error) {
+	if err := EnsureDefaultCodexPoolChannel(); err != nil {
+		return nil, err
+	}
 	var channel Channel
 	err := DB.Where("type = ? AND "+commonKeyCol+" = ?", constant.ChannelTypeCodex, constant.CodexPoolKeyMarker).First(&channel).Error
 	if err != nil {
@@ -235,8 +238,21 @@ func EnsureDefaultCodexPoolChannel() error {
 		if strings.TrimSpace(channel.Models) != models {
 			updates["models"] = models
 		}
+		if channel.Status != common.ChannelStatusEnabled {
+			updates["status"] = common.ChannelStatusEnabled
+			info := channel.GetOtherInfo()
+			delete(info, "status_reason")
+			delete(info, "status_time")
+			channel.SetOtherInfo(info)
+			updates["other_info"] = channel.OtherInfo
+		}
 		if len(updates) > 0 {
-			return DB.Model(&Channel{}).Where("id = ?", channel.Id).Updates(updates).Error
+			if err := DB.Model(&Channel{}).Where("id = ?", channel.Id).Updates(updates).Error; err != nil {
+				return err
+			}
+			_ = UpdateAbilityStatus(channel.Id, true)
+			InitChannelCache()
+			return nil
 		}
 		return nil
 	}
@@ -260,6 +276,18 @@ func EnsureDefaultCodexPoolChannel() error {
 		Priority:    &priority,
 	}
 	return DB.Create(&channel).Error
+}
+
+func GetCodexAccountOwnerByAccountID(accountID string) (int, bool) {
+	accountID = strings.TrimSpace(accountID)
+	if accountID == "" {
+		return 0, false
+	}
+	var account CodexAccount
+	if err := DB.Select("owner_user_id").Where("account_id = ?", accountID).First(&account).Error; err != nil {
+		return 0, false
+	}
+	return account.OwnerUserID, true
 }
 
 func IsCodexSubagent(userID int) bool {
@@ -384,7 +412,7 @@ func UpsertCodexAccountFromOAuthKeyForOwner(key CodexOAuthCredential, name strin
 		err := tx.Where("account_id = ?", accountID).First(&existing).Error
 		if err == nil {
 			if existing.OwnerUserID != ownerUserID {
-				return fmt.Errorf("codex account already belongs to another owner")
+				return fmt.Errorf("codex account already belongs to owner_user_id=%d", existing.OwnerUserID)
 			}
 			return tx.Model(&CodexAccount{}).Where("id = ?", existing.Id).Updates(map[string]any{
 				"name":         account.Name,
