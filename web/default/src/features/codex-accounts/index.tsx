@@ -26,6 +26,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Progress } from '@/components/ui/progress'
 import {
   Table,
   TableBody,
@@ -65,6 +66,25 @@ import {
 
 const QUOTA_PER_USD = 10000
 
+type CodexUsageWindow = {
+  label: string
+  usedPercent: number
+  resetAfterSeconds?: number
+  limitWindowSeconds?: number
+}
+
+type CodexUsagePreview = {
+  loading?: boolean
+  error?: string
+  fetchedAt?: number
+  planType?: string
+  hasCredits?: boolean
+  balance?: string
+  cloudMessages?: [number, number]
+  localMessages?: [number, number]
+  windows: CodexUsageWindow[]
+}
+
 function formatTime(ts?: number) {
   if (!ts || ts < 0) return '-'
   return new Date(ts * 1000).toLocaleString()
@@ -93,6 +113,115 @@ function statNumber(value?: number) {
   return (value || 0).toLocaleString()
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>
+  }
+  return null
+}
+
+function numberFrom(value: unknown) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string') {
+    const parsed = Number.parseFloat(value)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return undefined
+}
+
+function stringFrom(value: unknown) {
+  return typeof value === 'string' ? value : undefined
+}
+
+function boolFrom(value: unknown) {
+  return typeof value === 'boolean' ? value : undefined
+}
+
+function tupleFrom(value: unknown): [number, number] | undefined {
+  if (!Array.isArray(value) || value.length < 2) return undefined
+  const first = numberFrom(value[0]) ?? 0
+  const second = numberFrom(value[1]) ?? 0
+  return [first, second]
+}
+
+function clampPercent(value: number | undefined) {
+  if (!Number.isFinite(value)) return 0
+  return Math.max(0, Math.min(100, value || 0))
+}
+
+function formatDuration(seconds?: number) {
+  if (!seconds || seconds <= 0) return '即将重置'
+  if (seconds < 60) return `${Math.ceil(seconds)}秒`
+  if (seconds < 3600) return `${Math.ceil(seconds / 60)}分钟`
+  if (seconds < 86400) return `${Math.ceil(seconds / 3600)}小时`
+  return `${Math.ceil(seconds / 86400)}天`
+}
+
+function windowLabel(name: string, windowSeconds?: number) {
+  if (name === 'primary_window') return '主窗口'
+  if (name === 'secondary_window') return '周窗口'
+  if (name === 'code_review_rate_limit') return '代码审查'
+  if (windowSeconds) return `${formatDuration(windowSeconds)}窗口`
+  return name.replaceAll('_', ' ')
+}
+
+function extractUsageWindow(name: string, value: unknown): CodexUsageWindow | null {
+  const record = asRecord(value)
+  if (!record) return null
+  const usedPercent = numberFrom(record.used_percent)
+  const resetAfterSeconds = numberFrom(record.reset_after_seconds)
+  const limitWindowSeconds = numberFrom(record.limit_window_seconds)
+  if (usedPercent === undefined && resetAfterSeconds === undefined && limitWindowSeconds === undefined) {
+    return null
+  }
+  return {
+    label: windowLabel(name, limitWindowSeconds),
+    usedPercent: clampPercent(usedPercent),
+    resetAfterSeconds,
+    limitWindowSeconds,
+  }
+}
+
+function extractCodexUsagePreview(data: unknown): CodexUsagePreview {
+  const root = asRecord(data) || {}
+  const rateLimit = asRecord(root.rate_limit)
+  const credits = asRecord(root.credits)
+  const windows: CodexUsageWindow[] = []
+
+  const primary = extractUsageWindow('primary_window', rateLimit?.primary_window)
+  if (primary) windows.push(primary)
+  const secondary = extractUsageWindow('secondary_window', rateLimit?.secondary_window)
+  if (secondary) windows.push(secondary)
+  const codeReview = extractUsageWindow('code_review_rate_limit', root.code_review_rate_limit)
+  if (codeReview) windows.push(codeReview)
+
+  const additional = root.additional_rate_limits
+  if (Array.isArray(additional)) {
+    additional.forEach((item, index) => {
+      const window = extractUsageWindow(`附加窗口 ${index + 1}`, item)
+      if (window) windows.push(window)
+    })
+  } else {
+    const additionalRecord = asRecord(additional)
+    if (additionalRecord) {
+      Object.entries(additionalRecord).forEach(([key, value]) => {
+        const window = extractUsageWindow(key, value)
+        if (window) windows.push(window)
+      })
+    }
+  }
+
+  return {
+    fetchedAt: Date.now(),
+    planType: stringFrom(root.plan_type),
+    hasCredits: boolFrom(credits?.has_credits),
+    balance: stringFrom(credits?.balance),
+    cloudMessages: tupleFrom(credits?.approx_cloud_messages),
+    localMessages: tupleFrom(credits?.approx_local_messages),
+    windows,
+  }
+}
+
 export function CodexAccounts() {
   const [access, setAccess] = useState<CodexAccountAccess | null>(null)
   const [accounts, setAccounts] = useState<CodexAccount[]>([])
@@ -102,14 +231,13 @@ export function CodexAccounts() {
   const [selectedOwner, setSelectedOwner] = useState(-1)
   const [loading, setLoading] = useState(false)
   const [busyId, setBusyId] = useState<number | null>(null)
+  const [usageByAccount, setUsageByAccount] = useState<Record<number, CodexUsagePreview>>({})
   const [savingAccount, setSavingAccount] = useState(false)
   const [oauthOpen, setOAuthOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
   const [keyOpen, setKeyOpen] = useState(false)
   const [subagentOpen, setSubagentOpen] = useState(false)
-  const [usageOpen, setUsageOpen] = useState(false)
-  const [usageContent, setUsageContent] = useState('')
   const [authUrl, setAuthUrl] = useState('')
   const [callbackUrl, setCallbackUrl] = useState('')
   const [accountName, setAccountName] = useState('')
@@ -378,19 +506,32 @@ export function CodexAccounts() {
 
   const handleUsage = async (id: number) => {
     setBusyId(id)
+    setUsageByAccount((prev) => ({
+      ...prev,
+      [id]: { ...(prev[id] || { windows: [] }), loading: true, error: undefined },
+    }))
     try {
       const res = await getCodexAccountUsage(id)
-      setUsageContent(JSON.stringify(res, null, 2))
-      setUsageOpen(true)
       if (!res.success) {
-        toast.error(res.message || `获取用量失败，上游状态：${res.upstream_status || '未知'}`)
+        const message = res.message || `获取用量失败，上游状态：${res.upstream_status || '未知'}`
+        setUsageByAccount((prev) => ({
+          ...prev,
+          [id]: { ...(prev[id] || { windows: [] }), loading: false, error: message },
+        }))
+        toast.error(message)
+        return
       }
+      setUsageByAccount((prev) => ({
+        ...prev,
+        [id]: extractCodexUsagePreview(res.data),
+      }))
     } catch (error) {
-      setUsageContent(
-        JSON.stringify({ success: false, message: getErrorMessage(error, '获取用量失败') }, null, 2)
-      )
-      setUsageOpen(true)
-      toast.error(getErrorMessage(error, '获取用量失败'))
+      const message = getErrorMessage(error, '获取用量失败')
+      setUsageByAccount((prev) => ({
+        ...prev,
+        [id]: { ...(prev[id] || { windows: [] }), loading: false, error: message },
+      }))
+      toast.error(message)
     } finally {
       setBusyId(null)
     }
@@ -639,6 +780,7 @@ export function CodexAccounts() {
                         <TableHead>状态</TableHead>
                         <TableHead>优先级/备注</TableHead>
                         <TableHead>过期时间</TableHead>
+                        <TableHead>上游用量</TableHead>
                         <TableHead>请求/失败</TableHead>
                         <TableHead>错误</TableHead>
                         <TableHead className='text-right'>操作</TableHead>
@@ -681,6 +823,9 @@ export function CodexAccounts() {
                             </div>
                           </TableCell>
                           <TableCell>{formatTime(account.expired_at)}</TableCell>
+                          <TableCell className='min-w-[220px]'>
+                            <AccountUsagePreview usage={usageByAccount[account.id]} />
+                          </TableCell>
                           <TableCell>
                             {account.used_count}/{account.failed_count}
                           </TableCell>
@@ -1029,16 +1174,6 @@ export function CodexAccounts() {
           </DialogContent>
         </Dialog>
 
-        <Dialog open={usageOpen} onOpenChange={setUsageOpen}>
-          <DialogContent className='max-h-[85vh] overflow-y-auto sm:max-w-3xl'>
-            <DialogHeader>
-              <DialogTitle>Codex 上游用量</DialogTitle>
-            </DialogHeader>
-            <pre className='bg-muted max-h-[60vh] overflow-auto rounded-md p-3 text-xs'>
-              {usageContent}
-            </pre>
-          </DialogContent>
-        </Dialog>
       </SectionPageLayout.Content>
     </SectionPageLayout>
   )
@@ -1049,6 +1184,75 @@ function Stat(props: { label: string; value: string }) {
     <div className='rounded-lg border p-3'>
       <div className='text-muted-foreground text-xs'>{props.label}</div>
       <div className='mt-1 text-lg font-semibold'>{props.value}</div>
+    </div>
+  )
+}
+
+function AccountUsagePreview(props: { usage?: CodexUsagePreview }) {
+  const usage = props.usage
+  if (!usage) {
+    return <div className='text-muted-foreground text-xs'>点击“用量”刷新</div>
+  }
+  if (usage.loading) {
+    return (
+      <div className='text-muted-foreground flex items-center gap-2 text-xs'>
+        <Loader2 className='h-3.5 w-3.5 animate-spin' />
+        正在获取用量
+      </div>
+    )
+  }
+  if (usage.error) {
+    return <div className='text-destructive max-w-[260px] truncate text-xs'>{usage.error}</div>
+  }
+  const titleParts = [
+    usage.planType ? usage.planType.toUpperCase() : '',
+    usage.hasCredits === false ? '无余额' : '',
+    usage.balance && usage.balance !== '0' ? `余额 ${usage.balance}` : '',
+  ].filter(Boolean)
+
+  return (
+    <div className='min-w-[210px] space-y-1.5'>
+      {titleParts.length > 0 && (
+        <div className='text-muted-foreground flex flex-wrap gap-x-2 gap-y-1 text-[11px]'>
+          {titleParts.map((part) => (
+            <span key={part}>{part}</span>
+          ))}
+        </div>
+      )}
+      {usage.windows.length > 0 ? (
+        <div className='space-y-1.5'>
+          {usage.windows.slice(0, 4).map((window) => (
+            <div key={`${window.label}-${window.limitWindowSeconds || 0}`} className='space-y-1'>
+              <div className='flex items-center justify-between gap-2 text-[11px]'>
+                <span className='text-muted-foreground'>{window.label}</span>
+                <span className='tabular-nums'>
+                  {window.usedPercent.toFixed(0)}%
+                  {window.resetAfterSeconds !== undefined
+                    ? ` · ${formatDuration(window.resetAfterSeconds)}后重置`
+                    : ''}
+                </span>
+              </div>
+              <Progress value={window.usedPercent} className='h-1.5' />
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className='text-muted-foreground text-xs'>上游未返回限额窗口</div>
+      )}
+      {(usage.cloudMessages || usage.localMessages) && (
+        <div className='text-muted-foreground flex flex-wrap gap-x-2 text-[11px]'>
+          {usage.cloudMessages && (
+            <span>
+              云端 {usage.cloudMessages[0]}/{usage.cloudMessages[1]}
+            </span>
+          )}
+          {usage.localMessages && (
+            <span>
+              本地 {usage.localMessages[0]}/{usage.localMessages[1]}
+            </span>
+          )}
+        </div>
+      )}
     </div>
   )
 }
