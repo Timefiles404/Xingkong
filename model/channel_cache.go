@@ -115,6 +115,11 @@ func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel,
 		return nil, nil
 	}
 
+	channels = filterOutCodexPoolChannels(channels)
+	if len(channels) == 0 {
+		return nil, nil
+	}
+
 	if len(channels) == 1 {
 		if channel, ok := channelsIDM[channels[0]]; ok {
 			return channel, nil
@@ -188,6 +193,25 @@ func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel,
 	}
 	// return null if no channel is not found
 	return nil, errors.New("channel not found")
+}
+
+func filterOutCodexPoolChannels(channelIDs []int) []int {
+	if len(channelIDs) == 0 {
+		return channelIDs
+	}
+	filtered := make([]int, 0, len(channelIDs))
+	for _, channelID := range channelIDs {
+		channel, ok := channelsIDM[channelID]
+		if !ok {
+			filtered = append(filtered, channelID)
+			continue
+		}
+		if channel.Type == constant.ChannelTypeCodex {
+			continue
+		}
+		filtered = append(filtered, channelID)
+	}
+	return filtered
 }
 
 func CacheGetChannel(id int) (*Channel, error) {

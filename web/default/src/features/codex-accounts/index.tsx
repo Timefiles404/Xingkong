@@ -964,22 +964,22 @@ export function CodexAccounts() {
                               <div className='font-medium'>{key.name}</div>
                               <div className='text-muted-foreground text-xs'>{key.key}</div>
                             </TableCell>
-                            <TableCell>
-                              <Badge variant={key.status === 1 ? 'default' : 'secondary'}>
-                                {key.status === 1 ? '启用' : '停用'}
-                              </Badge>
-                            </TableCell>
-                            <TableCell>
-                              {key.unlimited_quota
-                                ? '无限'
-                                : `$${quotaToUsd(key.remain_quota)} / 已用 $${quotaToUsd(key.used_quota)}`}
-                            </TableCell>
-                            <TableCell>{formatTime(key.accessed_time)}</TableCell>
-                            <TableCell className='text-xs'>
-                              <div>输入 {statNumber(keyStat?.prompt_tokens)}</div>
-                              <div>输出 {statNumber(keyStat?.completion_tokens)}</div>
-                              <div>缓存 {statNumber(keyStat?.cache_tokens)}</div>
-                            </TableCell>
+                              <TableCell>
+                                <Badge variant={key.status === 1 ? 'default' : 'secondary'}>
+                                  {key.status === 1 ? '启用' : '停用'}
+                                </Badge>
+                              </TableCell>
+                              <TableCell>
+                                <ProxyKeyQuotaUsage tokenKey={key} />
+                              </TableCell>
+                              <TableCell>{formatTime(key.accessed_time)}</TableCell>
+                              <TableCell className='min-w-[180px] text-xs'>
+                                <ProxyKeyTokenUsage
+                                  promptTokens={keyStat?.prompt_tokens}
+                                  completionTokens={keyStat?.completion_tokens}
+                                  cacheTokens={keyStat?.cache_tokens}
+                                />
+                              </TableCell>
                             <TableCell className='space-x-1 text-right'>
                               <Button variant='ghost' size='sm' onClick={() => copyKey(key.id)}>
                                 复制
@@ -1184,6 +1184,67 @@ function Stat(props: { label: string; value: string }) {
     <div className='rounded-lg border p-3'>
       <div className='text-muted-foreground text-xs'>{props.label}</div>
       <div className='mt-1 text-lg font-semibold'>{props.value}</div>
+    </div>
+  )
+}
+
+function ProxyKeyQuotaUsage(props: { tokenKey: CodexProxyKey }) {
+  const key = props.tokenKey
+  if (key.unlimited_quota) {
+    return (
+      <div className='min-w-[170px] space-y-1'>
+        <div className='flex items-center justify-between text-xs'>
+          <span>无限额度</span>
+          <span className='text-muted-foreground'>已用 ${quotaToUsd(key.used_quota)}</span>
+        </div>
+        <Progress value={100} className='h-1.5 opacity-60' />
+      </div>
+    )
+  }
+  const total = Math.max(0, (key.remain_quota || 0) + (key.used_quota || 0))
+  const usedPercent = total > 0 ? clampPercent((key.used_quota / total) * 100) : 0
+  return (
+    <div className='min-w-[170px] space-y-1'>
+      <div className='flex items-center justify-between gap-2 text-xs'>
+        <span>已用 {usedPercent.toFixed(0)}%</span>
+        <span className='text-muted-foreground'>
+          ${quotaToUsd(key.used_quota)} / ${quotaToUsd(total)}
+        </span>
+      </div>
+      <Progress value={usedPercent} className='h-1.5' />
+      <div className='text-muted-foreground text-[11px]'>剩余 ${quotaToUsd(key.remain_quota)}</div>
+    </div>
+  )
+}
+
+function ProxyKeyTokenUsage(props: {
+  promptTokens?: number
+  completionTokens?: number
+  cacheTokens?: number
+}) {
+  const prompt = props.promptTokens || 0
+  const completion = props.completionTokens || 0
+  const cache = props.cacheTokens || 0
+  const total = Math.max(1, prompt + completion + cache)
+  const rows = [
+    { label: '输入', value: prompt },
+    { label: '输出', value: completion },
+    { label: '缓存', value: cache },
+  ]
+  return (
+    <div className='min-w-[170px] space-y-1.5'>
+      {rows.map((row) => {
+        const percent = row.value > 0 ? clampPercent((row.value / total) * 100) : 0
+        return (
+          <div key={row.label} className='space-y-1'>
+            <div className='flex items-center justify-between gap-2 text-[11px]'>
+              <span className='text-muted-foreground'>{row.label}</span>
+              <span className='tabular-nums'>{statNumber(row.value)}</span>
+            </div>
+            <Progress value={percent} className='h-1' />
+          </div>
+        )
+      })}
     </div>
   )
 }

@@ -118,7 +118,9 @@ func Distribute() func(c *gin.Context) {
 					if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, modelRequest.Model, usingGroup); found {
 						preferred, err := model.CacheGetChannel(preferredChannelID)
 						if err == nil && preferred != nil {
-							if preferred.Status != common.ChannelStatusEnabled {
+							if preferred.Type == constant.ChannelTypeCodex {
+								// Codex 官方号池只允许 Codex 子代理密钥走专用路径，普通渠道亲和不能命中。
+							} else if preferred.Status != common.ChannelStatusEnabled {
 								if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
 									abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorAffinityChannelDisabled))
 									return
