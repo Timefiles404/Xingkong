@@ -52,6 +52,7 @@ type codexProxyKeyRequest struct {
 	UnlimitedQuota bool   `json:"unlimited_quota"`
 	ExpiredTime    int64  `json:"expired_time"`
 	Status         int    `json:"status"`
+	OwnerUserID    int    `json:"owner_user_id"`
 }
 
 func codexAccountOAuthSessionKey(field string) string {
@@ -520,18 +521,18 @@ func CreateCodexProxyKey(c *gin.Context) {
 	if !ok {
 		return
 	}
-	ownerUserID = codexOwnerFromRequest(c, 0, isAdmin, ownerUserID)
+	req := codexProxyKeyRequest{}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	ownerUserID = codexOwnerFromRequest(c, req.OwnerUserID, isAdmin, ownerUserID)
 	if ownerUserID <= 0 {
 		if isAdmin {
 			c.JSON(http.StatusOK, gin.H{"success": false, "message": "管理员需要先选择一个子代理后再生成分发密钥"})
 			return
 		}
 		ownerUserID = c.GetInt("id")
-	}
-	req := codexProxyKeyRequest{}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		common.ApiError(c, err)
-		return
 	}
 	name := strings.TrimSpace(req.Name)
 	if name == "" {

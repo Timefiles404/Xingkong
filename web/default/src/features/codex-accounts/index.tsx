@@ -28,6 +28,13 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Progress } from '@/components/ui/progress'
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
   Table,
   TableBody,
   TableCell,
@@ -613,19 +620,23 @@ export function CodexAccounts() {
       </SectionPageLayout.Description>
       <SectionPageLayout.Actions>
         {isAdmin && (
-          <select
-            className='border-input bg-background h-9 rounded-md border px-3 text-sm'
-            value={selectedOwner}
-            onChange={(e) => setSelectedOwner(Number(e.target.value))}
+          <Select
+            value={String(selectedOwner)}
+            onValueChange={(value) => setSelectedOwner(Number(value))}
           >
-            <option value={-1}>全部账号</option>
-            <option value={0}>管理员公共池</option>
-            {subagents.map((item) => (
-              <option key={item.user_id} value={item.user_id}>
-                {item.display_name || item.username || item.user_id}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger className='w-[220px]'>
+              <SelectValue placeholder='选择账号池' />
+            </SelectTrigger>
+            <SelectContent align='end'>
+              <SelectItem value='-1'>全部账号</SelectItem>
+              <SelectItem value='0'>管理员公共池</SelectItem>
+              {subagents.map((item) => (
+                <SelectItem key={item.user_id} value={String(item.user_id)}>
+                  {item.display_name || item.username || item.user_id}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         )}
         <Button variant='outline' onClick={handleExport}>
           <Download className='mr-2 h-4 w-4' />
