@@ -437,6 +437,8 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 
 	// 为rpm和tpm创建单独的查询
 	rpmTpmQuery := LOG_DB.Table("logs").Select("count(*) rpm, sum(prompt_tokens) + sum(completion_tokens) tpm")
+	tx = tx.Where("other NOT LIKE ?", "%\"codex_subagent_key\"%")
+	rpmTpmQuery = rpmTpmQuery.Where("other NOT LIKE ?", "%\"codex_subagent_key\"%")
 
 	if username != "" {
 		tx = tx.Where("username = ?", username)
@@ -490,6 +492,7 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 
 func SumUsedToken(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string) (token int) {
 	tx := LOG_DB.Table("logs").Select("ifnull(sum(prompt_tokens),0) + ifnull(sum(completion_tokens),0)")
+	tx = tx.Where("other NOT LIKE ?", "%\"codex_subagent_key\"%")
 	if username != "" {
 		tx = tx.Where("username = ?", username)
 	}

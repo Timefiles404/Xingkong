@@ -365,7 +365,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	if summary.TotalTokens == 0 {
 		extraContent = append(extraContent, "上游没有返回计费信息，无法扣费（可能是上游超时）")
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, summary.ModelName, relayInfo.FinalPreConsumedQuota))
-	} else {
+	} else if !relayInfo.CodexSubagentKey {
 		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, summary.Quota)
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, summary.Quota)
 	}
@@ -459,38 +459,43 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		InjectTieredBillingInfo(other, relayInfo, tieredResult)
 	}
 
-	settlementSource := model.ProfitLotTypeWallet
-	if relayInfo.BillingSource == BillingSourceSubscription {
-		settlementSource = model.ProfitLotTypeSubscription
-	}
-	profitUsageInput := model.ProfitUsageInput{
-		RequestId:                           relayInfo.RequestId,
-		UserId:                              relayInfo.UserId,
-		SourceType:                          settlementSource,
-		SubscriptionId:                      relayInfo.SubscriptionId,
-		ModelName:                           summary.ModelName,
-		ChannelId:                           relayInfo.ChannelId,
-		PromptTokens:                        int64(summary.PromptTokens),
-		CompletionTokens:                    int64(summary.CompletionTokens),
-		CacheReadTokens:                     int64(summary.CacheTokens),
-		CacheWriteTokens:                    int64(cacheWriteTokensTotal(summary)),
-		QuotaUsed:                           int64(summary.Quota),
-		DownstreamPricingMode:               map[bool]string{true: "per-request", false: "per-token"}[relayInfo.PriceData.UsePrice],
-		DownstreamFixedPriceUSD:             relayInfo.PriceData.ModelPrice * relayInfo.PriceData.GroupRatioInfo.GroupRatio,
-		DownstreamModelRatioSnapshot:        relayInfo.PriceData.ModelRatio,
-		DownstreamCompletionRatioSnapshot:   relayInfo.PriceData.CompletionRatio,
-		DownstreamCacheRatioSnapshot:        relayInfo.PriceData.CacheRatio,
-		DownstreamCacheWriteRatioSnapshot:   relayInfo.PriceData.CacheCreationRatio,
-		DownstreamGroupRatioSnapshot:        relayInfo.PriceData.GroupRatioInfo.GroupRatio,
-		DownstreamGroupSpecialRatioSnapshot: relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio,
-	}
-	settlementAudit, settlementErr := model.RecordUsageSettlementWithSummary(profitUsageInput)
-	if settlementErr != nil {
-		logger.LogError(ctx, "error recording profit usage settlement: "+settlementErr.Error())
-	} else if settlementAudit != nil {
-		other["downstream_charge_cny"] = settlementAudit.RealizedRevenueCNY
-		other["upstream_cost_cny"] = settlementAudit.UpstreamCostCNY
-		other["request_gross_profit_cny"] = settlementAudit.RequestGrossProfitCNY
+	if relayInfo.CodexSubagentKey {
+		other["codex_subagent_key"] = true
+		other["financial_accounting_skipped"] = true
+	} else {
+		settlementSource := model.ProfitLotTypeWallet
+		if relayInfo.BillingSource == BillingSourceSubscription {
+			settlementSource = model.ProfitLotTypeSubscription
+		}
+		profitUsageInput := model.ProfitUsageInput{
+			RequestId:                           relayInfo.RequestId,
+			UserId:                              relayInfo.UserId,
+			SourceType:                          settlementSource,
+			SubscriptionId:                      relayInfo.SubscriptionId,
+			ModelName:                           summary.ModelName,
+			ChannelId:                           relayInfo.ChannelId,
+			PromptTokens:                        int64(summary.PromptTokens),
+			CompletionTokens:                    int64(summary.CompletionTokens),
+			CacheReadTokens:                     int64(summary.CacheTokens),
+			CacheWriteTokens:                    int64(cacheWriteTokensTotal(summary)),
+			QuotaUsed:                           int64(summary.Quota),
+			DownstreamPricingMode:               map[bool]string{true: "per-request", false: "per-token"}[relayInfo.PriceData.UsePrice],
+			DownstreamFixedPriceUSD:             relayInfo.PriceData.ModelPrice * relayInfo.PriceData.GroupRatioInfo.GroupRatio,
+			DownstreamModelRatioSnapshot:        relayInfo.PriceData.ModelRatio,
+			DownstreamCompletionRatioSnapshot:   relayInfo.PriceData.CompletionRatio,
+			DownstreamCacheRatioSnapshot:        relayInfo.PriceData.CacheRatio,
+			DownstreamCacheWriteRatioSnapshot:   relayInfo.PriceData.CacheCreationRatio,
+			DownstreamGroupRatioSnapshot:        relayInfo.PriceData.GroupRatioInfo.GroupRatio,
+			DownstreamGroupSpecialRatioSnapshot: relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio,
+		}
+		settlementAudit, settlementErr := model.RecordUsageSettlementWithSummary(profitUsageInput)
+		if settlementErr != nil {
+			logger.LogError(ctx, "error recording profit usage settlement: "+settlementErr.Error())
+		} else if settlementAudit != nil {
+			other["downstream_charge_cny"] = settlementAudit.RealizedRevenueCNY
+			other["upstream_cost_cny"] = settlementAudit.UpstreamCostCNY
+			other["request_gross_profit_cny"] = settlementAudit.RequestGrossProfitCNY
+		}
 	}
 
 	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{

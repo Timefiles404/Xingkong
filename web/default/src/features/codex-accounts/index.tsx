@@ -258,6 +258,20 @@ export function CodexAccounts() {
     await load()
   }
 
+  const handleImportFiles = async (files: FileList | null) => {
+    const selected = Array.from(files || [])
+    if (selected.length === 0) return
+    try {
+      const parsed = await Promise.all(
+        selected.map(async (file) => JSON.parse(await file.text()) as unknown)
+      )
+      setImportRaw(JSON.stringify(parsed.length === 1 ? parsed[0] : parsed, null, 2))
+      toast.success(`已读取 ${selected.length} 个 JSON 文件`)
+    } catch (error) {
+      toast.error(error instanceof Error ? `JSON 解析失败：${error.message}` : 'JSON 解析失败')
+    }
+  }
+
   const createKey = async () => {
     const res = await createCodexProxyKey({
       name: keyName,
@@ -389,15 +403,31 @@ export function CodexAccounts() {
               导入 CPA 账号
             </Button>
           </DialogTrigger>
-          <DialogContent className='sm:max-w-3xl'>
+          <DialogContent className='max-h-[85vh] overflow-y-auto sm:max-w-3xl'>
             <DialogHeader>
               <DialogTitle>导入 CLIProxyAPI 账号</DialogTitle>
               <DialogDescription>
-                粘贴 CPA 导出的 Codex JSON。管理员可先在右上角选择导入到公共池或某个子代理。
+                选择一个或多个 CPA 导出的 Codex JSON 文件；也可以在下方直接粘贴 JSON。
+                管理员可先在右上角选择导入到公共池或某个子代理。
               </DialogDescription>
             </DialogHeader>
+            <div className='space-y-2'>
+              <Label>选择 JSON 文件</Label>
+              <Input
+                type='file'
+                accept='application/json,.json'
+                multiple
+                onChange={(e) => {
+                  void handleImportFiles(e.target.files)
+                  e.currentTarget.value = ''
+                }}
+              />
+              <div className='text-muted-foreground text-xs'>
+                支持一次选择多个文件，系统会合并后导入；每个文件可以是单账号对象或 CPA 导出的数组/对象。
+              </div>
+            </div>
             <Textarea
-              className='min-h-[320px] font-mono text-xs'
+              className='max-h-[260px] min-h-[160px] resize-y overflow-y-auto font-mono text-xs'
               value={importRaw}
               onChange={(e) => setImportRaw(e.target.value)}
               placeholder='粘贴 CPA 导出的 Codex JSON'
@@ -621,7 +651,7 @@ export function CodexAccounts() {
                       </DialogHeader>
                       <Label>密钥名称</Label>
                       <Input value={keyName} onChange={(e) => setKeyName(e.target.value)} />
-                      <Label>金额限制（USD）</Label>
+                      <Label>托管额度限制（USD 面值，仅限制此 key）</Label>
                       <Input value={keyUsd} onChange={(e) => setKeyUsd(e.target.value)} />
                       <label className='flex items-center gap-2 text-sm'>
                         <input
@@ -629,7 +659,7 @@ export function CodexAccounts() {
                           checked={keyUnlimited}
                           onChange={(e) => setKeyUnlimited(e.target.checked)}
                         />
-                        不限制该 key 金额
+                        不限制该 key 托管额度
                       </label>
                       <DialogFooter>
                         <Button variant='outline' onClick={() => setKeyOpen(false)}>
@@ -646,7 +676,7 @@ export function CodexAccounts() {
                     <Stat label='输入 Token' value={statNumber(stats?.total?.prompt_tokens)} />
                     <Stat label='输出 Token' value={statNumber(stats?.total?.completion_tokens)} />
                     <Stat label='缓存 Token' value={statNumber(stats?.total?.cache_tokens)} />
-                    <Stat label='已用金额' value={`$${quotaToUsd(stats?.total?.quota)}`} />
+                    <Stat label='已用托管额度' value={`$${quotaToUsd(stats?.total?.quota)}`} />
                   </div>
                 </CardContent>
               </Card>
@@ -657,7 +687,7 @@ export function CodexAccounts() {
                       <TableRow>
                         <TableHead>密钥</TableHead>
                         <TableHead>状态</TableHead>
-                        <TableHead>额度</TableHead>
+                        <TableHead>托管额度</TableHead>
                         <TableHead>最近使用</TableHead>
                         <TableHead>用量</TableHead>
                         <TableHead className='text-right'>操作</TableHead>
@@ -780,7 +810,7 @@ export function CodexAccounts() {
                       <TableRow>
                         <TableHead>用户</TableHead>
                         <TableHead>账号/密钥</TableHead>
-                        <TableHead>已用金额</TableHead>
+                        <TableHead>已用托管额度</TableHead>
                         <TableHead>创建时间</TableHead>
                         <TableHead className='text-right'>操作</TableHead>
                       </TableRow>
@@ -861,7 +891,7 @@ export function CodexAccounts() {
           </DialogHeader>
           <Label>名称</Label>
           <Input value={editKeyName} onChange={(e) => setEditKeyName(e.target.value)} />
-          <Label>剩余额度（USD）</Label>
+          <Label>剩余托管额度（USD 面值）</Label>
           <Input value={editKeyUsd} onChange={(e) => setEditKeyUsd(e.target.value)} />
           <label className='flex items-center gap-2 text-sm'>
             <input
@@ -869,7 +899,7 @@ export function CodexAccounts() {
               checked={editKeyUnlimited}
               onChange={(e) => setEditKeyUnlimited(e.target.checked)}
             />
-            不限制该 key 金额
+            不限制该 key 托管额度
           </label>
           <DialogFooter>
             <Button variant='outline' onClick={() => setEditKey(null)}>
@@ -881,7 +911,7 @@ export function CodexAccounts() {
       </Dialog>
 
       <Dialog open={usageOpen} onOpenChange={setUsageOpen}>
-        <DialogContent className='sm:max-w-3xl'>
+        <DialogContent className='max-h-[85vh] overflow-y-auto sm:max-w-3xl'>
           <DialogHeader>
             <DialogTitle>Codex 上游用量</DialogTitle>
           </DialogHeader>
