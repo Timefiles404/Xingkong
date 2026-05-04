@@ -19,16 +19,18 @@ import (
 )
 
 type codexAccountOAuthCompleteRequest struct {
-	Input   string `json:"input"`
-	Name    string `json:"name"`
-	BaseURL string `json:"base_url"`
-	Proxy   string `json:"proxy"`
+	Input       string `json:"input"`
+	Name        string `json:"name"`
+	BaseURL     string `json:"base_url"`
+	Proxy       string `json:"proxy"`
+	OwnerUserID int    `json:"owner_user_id"`
 }
 
 type codexAccountImportRequest struct {
-	Raw     string `json:"raw"`
-	BaseURL string `json:"base_url"`
-	Proxy   string `json:"proxy"`
+	Raw         string `json:"raw"`
+	BaseURL     string `json:"base_url"`
+	Proxy       string `json:"proxy"`
+	OwnerUserID int    `json:"owner_user_id"`
 }
 
 type codexAccountUpdateRequest struct {
@@ -40,11 +42,85 @@ type codexAccountUpdateRequest struct {
 	Status   *int    `json:"status"`
 }
 
+type codexSubagentRequest struct {
+	UserID int `json:"user_id"`
+}
+
+type codexProxyKeyRequest struct {
+	Name           string `json:"name"`
+	RemainQuota    int    `json:"remain_quota"`
+	UnlimitedQuota bool   `json:"unlimited_quota"`
+	ExpiredTime    int64  `json:"expired_time"`
+	Status         int    `json:"status"`
+}
+
 func codexAccountOAuthSessionKey(field string) string {
 	return fmt.Sprintf("codex_account_oauth_%s", field)
 }
 
+func codexAccountScope(c *gin.Context) (ownerUserID int, isAdmin bool, ok bool) {
+	role := c.GetInt("role")
+	userID := c.GetInt("id")
+	isAdmin = role >= common.RoleAdminUser
+	if isAdmin {
+		return 0, true, true
+	}
+	if model.IsCodexSubagent(userID) {
+		return userID, false, true
+	}
+	c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "没有 Codex 子代理权限"})
+	return 0, false, false
+}
+
+func codexOwnerFromRequest(c *gin.Context, requested int, isAdmin bool, fallback int) int {
+	if !isAdmin {
+		return fallback
+	}
+	if requested > 0 {
+		return requested
+	}
+	queryOwner, _ := strconv.Atoi(c.Query("owner_user_id"))
+	if queryOwner > 0 {
+		return queryOwner
+	}
+	return 0
+}
+
+func ensureCodexAccountAccess(c *gin.Context, accountID int) (*model.CodexAccount, bool) {
+	ownerUserID, isAdmin, ok := codexAccountScope(c)
+	if !ok {
+		return nil, false
+	}
+	var account model.CodexAccount
+	if err := model.DB.Where("id = ?", accountID).First(&account).Error; err != nil {
+		common.ApiError(c, err)
+		return nil, false
+	}
+	if !isAdmin && account.OwnerUserID != ownerUserID {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "只能管理自己的 Codex 账号"})
+		return nil, false
+	}
+	return &account, true
+}
+
+func GetCodexAccountAccess(c *gin.Context) {
+	isAdmin := c.GetInt("role") >= common.RoleAdminUser
+	isSubagent := model.IsCodexSubagent(c.GetInt("id"))
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": gin.H{
+			"is_admin":    isAdmin,
+			"is_subagent": isSubagent,
+			"user_id":     c.GetInt("id"),
+		},
+	})
+}
+
 func GetCodexAccounts(c *gin.Context) {
+	ownerUserID, isAdmin, ok := codexAccountScope(c)
+	if !ok {
+		return
+	}
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 	if page < 1 {
@@ -55,6 +131,14 @@ func GetCodexAccounts(c *gin.Context) {
 	}
 	search := strings.TrimSpace(c.Query("search"))
 	tx := model.DB.Model(&model.CodexAccount{})
+	if isAdmin {
+		if rawOwner, exists := c.GetQuery("owner_user_id"); exists {
+			queryOwner, _ := strconv.Atoi(rawOwner)
+			tx = tx.Where("owner_user_id = ?", queryOwner)
+		}
+	} else {
+		tx = tx.Where("owner_user_id = ?", ownerUserID)
+	}
 	if search != "" {
 		like := "%" + search + "%"
 		tx = tx.Where("name LIKE ? OR email LIKE ? OR account_id LIKE ?", like, like, like)
@@ -124,7 +208,12 @@ func CompleteCodexAccountOAuth(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
-	account, err := model.UpsertCodexAccountFromOAuthKey(*credential, req.Name, req.BaseURL, req.Proxy)
+	ownerUserID, isAdmin, ok := codexAccountScope(c)
+	if !ok {
+		return
+	}
+	ownerUserID = codexOwnerFromRequest(c, req.OwnerUserID, isAdmin, ownerUserID)
+	account, err := model.UpsertCodexAccountFromOAuthKeyForOwner(*credential, req.Name, req.BaseURL, req.Proxy, ownerUserID)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -137,6 +226,10 @@ func CompleteCodexAccountOAuth(c *gin.Context) {
 }
 
 func ImportCodexAccounts(c *gin.Context) {
+	ownerUserID, isAdmin, ok := codexAccountScope(c)
+	if !ok {
+		return
+	}
 	req := codexAccountImportRequest{}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		common.ApiError(c, err)
@@ -147,9 +240,10 @@ func ImportCodexAccounts(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
+	ownerUserID = codexOwnerFromRequest(c, req.OwnerUserID, isAdmin, ownerUserID)
 	imported := 0
 	for _, credential := range credentials {
-		if _, err := model.UpsertCodexAccountFromOAuthKey(credential, "", req.BaseURL, req.Proxy); err == nil {
+		if _, err := model.UpsertCodexAccountFromOAuthKeyForOwner(credential, "", req.BaseURL, req.Proxy, ownerUserID); err == nil {
 			imported++
 		}
 	}
@@ -157,8 +251,21 @@ func ImportCodexAccounts(c *gin.Context) {
 }
 
 func ExportCodexAccounts(c *gin.Context) {
+	ownerUserID, isAdmin, ok := codexAccountScope(c)
+	if !ok {
+		return
+	}
 	var accounts []model.CodexAccount
-	if err := model.DB.Order("id asc").Find(&accounts).Error; err != nil {
+	tx := model.DB.Order("id asc")
+	if isAdmin {
+		if rawOwner, exists := c.GetQuery("owner_user_id"); exists {
+			queryOwner, _ := strconv.Atoi(rawOwner)
+			tx = tx.Where("owner_user_id = ?", queryOwner)
+		}
+	} else {
+		tx = tx.Where("owner_user_id = ?", ownerUserID)
+	}
+	if err := tx.Find(&accounts).Error; err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -186,6 +293,9 @@ func UpdateCodexAccount(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
 		common.ApiError(c, err)
+		return
+	}
+	if _, ok := ensureCodexAccountAccess(c, id); !ok {
 		return
 	}
 	req := codexAccountUpdateRequest{}
@@ -237,6 +347,9 @@ func DeleteCodexAccount(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	if _, ok := ensureCodexAccountAccess(c, id); !ok {
+		return
+	}
 	if err := model.DB.Delete(&model.CodexAccount{}, id).Error; err != nil {
 		common.ApiError(c, err)
 		return
@@ -248,6 +361,9 @@ func RefreshCodexAccount(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
 		common.ApiError(c, err)
+		return
+	}
+	if _, ok := ensureCodexAccountAccess(c, id); !ok {
 		return
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
@@ -264,6 +380,9 @@ func GetCodexAccountUsage(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
 		common.ApiError(c, err)
+		return
+	}
+	if _, ok := ensureCodexAccountAccess(c, id); !ok {
 		return
 	}
 	var account model.CodexAccount
@@ -304,4 +423,337 @@ func GetCodexAccountUsage(c *gin.Context) {
 		data = string(body)
 	}
 	c.JSON(http.StatusOK, gin.H{"success": status >= 200 && status < 300, "upstream_status": status, "data": data})
+}
+
+func ListCodexSubagents(c *gin.Context) {
+	items, err := model.ListCodexSubagents()
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": items})
+}
+
+func AddCodexSubagent(c *gin.Context) {
+	req := codexSubagentRequest{}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if err := model.SetCodexSubagent(req.UserID, c.GetInt("id")); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+func DeleteCodexSubagent(c *gin.Context) {
+	userID, err := strconv.Atoi(c.Param("user_id"))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if err := model.DeleteCodexSubagent(userID); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+func ListCodexProxyKeys(c *gin.Context) {
+	ownerUserID, isAdmin, ok := codexAccountScope(c)
+	if !ok {
+		return
+	}
+	ownerUserID = codexOwnerFromRequest(c, 0, isAdmin, ownerUserID)
+	hasOwnerFilter := false
+	if isAdmin {
+		_, hasOwnerFilter = c.GetQuery("owner_user_id")
+	}
+	if ownerUserID <= 0 && !isAdmin {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "没有 Codex 子代理权限"})
+		return
+	}
+	tx := model.DB.Where("codex_subagent_only = ?", true)
+	if ownerUserID > 0 || hasOwnerFilter {
+		tx = tx.Where("codex_subagent_owner = ?", ownerUserID)
+	}
+	var tokens []model.Token
+	if err := tx.Order("id desc").Find(&tokens).Error; err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	items := make([]*model.Token, 0, len(tokens))
+	for i := range tokens {
+		token := tokens[i]
+		items = append(items, buildMaskedTokenResponse(&token))
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": items})
+}
+
+func CreateCodexProxyKey(c *gin.Context) {
+	ownerUserID, isAdmin, ok := codexAccountScope(c)
+	if !ok {
+		return
+	}
+	ownerUserID = codexOwnerFromRequest(c, 0, isAdmin, ownerUserID)
+	if ownerUserID <= 0 {
+		if isAdmin {
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": "管理员需要先选择一个子代理后再生成分发密钥"})
+			return
+		}
+		ownerUserID = c.GetInt("id")
+	}
+	req := codexProxyKeyRequest{}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		name = "Codex 托管密钥"
+	}
+	if req.RemainQuota < 0 {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "额度不能为负数"})
+		return
+	}
+	key, err := common.GenerateKey()
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	token := model.Token{
+		UserId:             ownerUserID,
+		Name:               name,
+		Key:                key,
+		Status:             common.TokenStatusEnabled,
+		CreatedTime:        common.GetTimestamp(),
+		AccessedTime:       common.GetTimestamp(),
+		ExpiredTime:        req.ExpiredTime,
+		RemainQuota:        req.RemainQuota,
+		UnlimitedQuota:     req.UnlimitedQuota,
+		ModelLimitsEnabled: true,
+		ModelLimits:        strings.Join(model.CodexOfficialModelList(), ","),
+		Group:              "default",
+		CodexSubagentOnly:  true,
+		CodexSubagentOwner: ownerUserID,
+	}
+	if token.ExpiredTime == 0 {
+		token.ExpiredTime = -1
+	}
+	if err := token.Insert(); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"key": "sk-" + key, "token": buildMaskedTokenResponse(&token)}})
+}
+
+func UpdateCodexProxyKey(c *gin.Context) {
+	ownerUserID, isAdmin, ok := codexAccountScope(c)
+	if !ok {
+		return
+	}
+	ownerUserID = codexOwnerFromRequest(c, 0, isAdmin, ownerUserID)
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	var token model.Token
+	tx := model.DB.Where("id = ? AND codex_subagent_only = ?", id, true)
+	if ownerUserID > 0 {
+		tx = tx.Where("codex_subagent_owner = ?", ownerUserID)
+	}
+	if err := tx.First(&token).Error; err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	req := codexProxyKeyRequest{}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if strings.TrimSpace(req.Name) != "" {
+		token.Name = strings.TrimSpace(req.Name)
+	}
+	if req.RemainQuota >= 0 {
+		token.RemainQuota = req.RemainQuota
+	}
+	if req.ExpiredTime != 0 {
+		token.ExpiredTime = req.ExpiredTime
+	}
+	if req.Status != 0 {
+		token.Status = req.Status
+	}
+	token.UnlimitedQuota = req.UnlimitedQuota
+	token.ModelLimitsEnabled = true
+	token.ModelLimits = strings.Join(model.CodexOfficialModelList(), ",")
+	token.Group = "default"
+	token.CodexSubagentOnly = true
+	token.CodexSubagentOwner = token.UserId
+	if err := token.Update(); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+func DeleteCodexProxyKey(c *gin.Context) {
+	ownerUserID, isAdmin, ok := codexAccountScope(c)
+	if !ok {
+		return
+	}
+	ownerUserID = codexOwnerFromRequest(c, 0, isAdmin, ownerUserID)
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	var token model.Token
+	tx := model.DB.Where("id = ? AND codex_subagent_only = ?", id, true)
+	if ownerUserID > 0 {
+		tx = tx.Where("codex_subagent_owner = ?", ownerUserID)
+	}
+	if err := tx.First(&token).Error; err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if err := token.Delete(); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+func GetCodexProxyKeySecret(c *gin.Context) {
+	ownerUserID, isAdmin, ok := codexAccountScope(c)
+	if !ok {
+		return
+	}
+	ownerUserID = codexOwnerFromRequest(c, 0, isAdmin, ownerUserID)
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	var token model.Token
+	tx := model.DB.Where("id = ? AND codex_subagent_only = ?", id, true)
+	if ownerUserID > 0 {
+		tx = tx.Where("codex_subagent_owner = ?", ownerUserID)
+	}
+	if err := tx.First(&token).Error; err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"key": "sk-" + token.Key}})
+}
+
+func GetCodexProxyStats(c *gin.Context) {
+	ownerUserID, isAdmin, ok := codexAccountScope(c)
+	if !ok {
+		return
+	}
+	ownerUserID = codexOwnerFromRequest(c, 0, isAdmin, ownerUserID)
+	hasOwnerFilter := false
+	if isAdmin {
+		_, hasOwnerFilter = c.GetQuery("owner_user_id")
+	}
+	if ownerUserID <= 0 && !isAdmin {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "没有 Codex 子代理权限"})
+		return
+	}
+	var tokens []model.Token
+	tx := model.DB.Where("codex_subagent_only = ?", true)
+	if ownerUserID > 0 || hasOwnerFilter {
+		tx = tx.Where("codex_subagent_owner = ?", ownerUserID)
+	}
+	if err := tx.Find(&tokens).Error; err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	tokenIDs := make([]int, 0, len(tokens))
+	tokenNames := map[int]string{}
+	for _, token := range tokens {
+		tokenIDs = append(tokenIDs, token.Id)
+		tokenNames[token.Id] = token.Name
+	}
+	if len(tokenIDs) == 0 {
+		c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"total": gin.H{}, "keys": []gin.H{}}})
+		return
+	}
+	var logs []model.Log
+	if err := model.LOG_DB.Where("type = ? AND token_id IN ?", model.LogTypeConsume, tokenIDs).Find(&logs).Error; err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	type stat struct {
+		TokenID          int    `json:"token_id"`
+		TokenName        string `json:"token_name"`
+		PromptTokens     int64  `json:"prompt_tokens"`
+		CompletionTokens int64  `json:"completion_tokens"`
+		CacheTokens      int64  `json:"cache_tokens"`
+		Quota            int64  `json:"quota"`
+		Requests         int64  `json:"requests"`
+	}
+	total := stat{}
+	byToken := map[int]*stat{}
+	for _, token := range tokens {
+		byToken[token.Id] = &stat{TokenID: token.Id, TokenName: token.Name}
+	}
+	for _, log := range logs {
+		item := byToken[log.TokenId]
+		if item == nil {
+			item = &stat{TokenID: log.TokenId, TokenName: tokenNames[log.TokenId]}
+			byToken[log.TokenId] = item
+		}
+		cacheTokens := int64(extractCodexCacheTokens(log.Other))
+		item.PromptTokens += int64(log.PromptTokens)
+		item.CompletionTokens += int64(log.CompletionTokens)
+		item.CacheTokens += cacheTokens
+		item.Quota += int64(log.Quota)
+		item.Requests++
+		total.PromptTokens += int64(log.PromptTokens)
+		total.CompletionTokens += int64(log.CompletionTokens)
+		total.CacheTokens += cacheTokens
+		total.Quota += int64(log.Quota)
+		total.Requests++
+	}
+	items := make([]stat, 0, len(byToken))
+	for _, item := range byToken {
+		items = append(items, *item)
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"total": total, "keys": items}})
+}
+
+func extractCodexCacheTokens(raw string) int {
+	other, _ := common.StrToMap(raw)
+	if other == nil {
+		return 0
+	}
+	total := numericMapValue(other, "cache_tokens")
+	total += numericMapValue(other, "cache_write_tokens")
+	total += numericMapValue(other, "cache_creation_tokens")
+	total += numericMapValue(other, "cache_creation_tokens_5m")
+	total += numericMapValue(other, "cache_creation_tokens_1h")
+	return total
+}
+
+func numericMapValue(m map[string]interface{}, key string) int {
+	v, ok := m[key]
+	if !ok {
+		return 0
+	}
+	switch n := v.(type) {
+	case float64:
+		return int(n)
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case json.Number:
+		i, _ := n.Int64()
+		return int(i)
+	default:
+		return 0
+	}
 }

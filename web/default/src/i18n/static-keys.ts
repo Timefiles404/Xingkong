@@ -552,4 +552,5 @@ export const STATIC_I18N_KEYS = [
   'Failed to load',
   'Expired at',
   'Cancelled at',
+  'Codex 账号托管',
 ] as const

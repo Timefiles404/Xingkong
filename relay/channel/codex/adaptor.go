@@ -245,7 +245,11 @@ func ensureSelectedCodexAccount(c *gin.Context, info *relaycommon.RelayInfo) (*m
 			}
 		}
 	}
-	account, err := model.SelectCodexAccountForRelay(codexSessionKeyFromContext(c), codexRequestedModel(c, info))
+	ownerUserID := 0
+	if c != nil {
+		ownerUserID = common.GetContextKeyInt(c, constant.ContextKeyCodexSubagentOwnerId)
+	}
+	account, err := model.SelectCodexAccountForRelayWithOwner(codexSessionKeyFromContext(c), codexRequestedModel(c, info), ownerUserID)
 	if err != nil {
 		return nil, err
 	}

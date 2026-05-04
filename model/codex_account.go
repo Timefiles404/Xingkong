@@ -21,6 +21,7 @@ const (
 
 type CodexAccount struct {
 	Id            int    `json:"id"`
+	OwnerUserID   int    `json:"owner_user_id" gorm:"default:0;index"`
 	Name          string `json:"name" gorm:"type:varchar(128);default:''"`
 	Email         string `json:"email" gorm:"type:varchar(255);index"`
 	AccountID     string `json:"account_id" gorm:"type:varchar(128);uniqueIndex"`
@@ -41,8 +42,17 @@ type CodexAccount struct {
 	UpdatedAt     int64  `json:"updated_at" gorm:"bigint"`
 }
 
+type CodexSubagent struct {
+	Id          int   `json:"id"`
+	UserID      int   `json:"user_id" gorm:"uniqueIndex"`
+	AdminUserID int   `json:"admin_user_id" gorm:"default:0;index"`
+	CreatedAt   int64 `json:"created_at" gorm:"bigint"`
+	UpdatedAt   int64 `json:"updated_at" gorm:"bigint"`
+}
+
 type CodexAccountAffinity struct {
 	Id           int    `json:"id"`
+	OwnerUserID  int    `json:"owner_user_id" gorm:"default:0;index"`
 	SessionKey   string `json:"session_key" gorm:"type:varchar(255);uniqueIndex"`
 	Model        string `json:"model" gorm:"type:varchar(128);index"`
 	AccountRowID int    `json:"account_row_id" gorm:"index"`
@@ -64,8 +74,20 @@ type CodexAccountModelState struct {
 
 type CodexAccountPublic struct {
 	CodexAccount
-	HasRefreshToken bool                     `json:"has_refresh_token"`
-	ModelStates     []CodexAccountModelState `json:"model_states,omitempty"`
+	HasRefreshToken  bool                     `json:"has_refresh_token"`
+	ModelStates      []CodexAccountModelState `json:"model_states,omitempty"`
+	OwnerUsername    string                   `json:"owner_username,omitempty"`
+	OwnerDisplayName string                   `json:"owner_display_name,omitempty"`
+}
+
+type CodexSubagentPublic struct {
+	CodexSubagent
+	Username     string `json:"username"`
+	DisplayName  string `json:"display_name"`
+	Email        string `json:"email"`
+	AccountCount int64  `json:"account_count"`
+	KeyCount     int64  `json:"key_count"`
+	UsedQuota    int64  `json:"used_quota"`
 }
 
 type CodexOAuthCredential struct {
@@ -104,6 +126,22 @@ func (a *CodexAccount) BeforeCreate(tx *gorm.DB) error {
 
 func (a *CodexAccount) BeforeUpdate(tx *gorm.DB) error {
 	a.UpdatedAt = common.GetTimestamp()
+	return nil
+}
+
+func (s *CodexSubagent) BeforeCreate(tx *gorm.DB) error {
+	now := common.GetTimestamp()
+	if s.CreatedAt == 0 {
+		s.CreatedAt = now
+	}
+	if s.UpdatedAt == 0 {
+		s.UpdatedAt = now
+	}
+	return nil
+}
+
+func (s *CodexSubagent) BeforeUpdate(tx *gorm.DB) error {
+	s.UpdatedAt = common.GetTimestamp()
 	return nil
 }
 
@@ -151,6 +189,13 @@ func (a *CodexAccount) Public() CodexAccountPublic {
 	_ = DB.Where("account_row_id = ? AND next_retry_time > 0", a.Id).
 		Order("next_retry_time desc").
 		Find(&pub.ModelStates).Error
+	if a.OwnerUserID > 0 {
+		var user User
+		if err := DB.Select("id", "username", "display_name").Where("id = ?", a.OwnerUserID).First(&user).Error; err == nil {
+			pub.OwnerUsername = user.Username
+			pub.OwnerDisplayName = user.DisplayName
+		}
+	}
 	return pub
 }
 
@@ -161,6 +206,15 @@ func CodexOfficialModelList() []string {
 		"gpt-5.3-codex",
 		"gpt-5.3-codex-spark",
 	}
+}
+
+func GetCodexPoolChannel() (*Channel, error) {
+	var channel Channel
+	err := DB.Where("type = ? AND "+commonKeyCol+" = ?", constant.ChannelTypeCodex, constant.CodexPoolKeyMarker).First(&channel).Error
+	if err != nil {
+		return nil, err
+	}
+	return &channel, nil
 }
 
 func EnsureDefaultCodexPoolChannel() error {
@@ -208,7 +262,72 @@ func EnsureDefaultCodexPoolChannel() error {
 	return DB.Create(&channel).Error
 }
 
+func IsCodexSubagent(userID int) bool {
+	if userID <= 0 {
+		return false
+	}
+	var count int64
+	_ = DB.Model(&CodexSubagent{}).Where("user_id = ?", userID).Count(&count).Error
+	return count > 0
+}
+
+func SetCodexSubagent(userID int, adminUserID int) error {
+	if userID <= 0 {
+		return errors.New("user_id is required")
+	}
+	var user User
+	if err := DB.Where("id = ? AND status = ?", userID, common.UserStatusEnabled).First(&user).Error; err != nil {
+		return err
+	}
+	if user.Role >= common.RoleAdminUser {
+		return errors.New("管理员无需设置为 Codex 子代理")
+	}
+	subagent := CodexSubagent{UserID: userID, AdminUserID: adminUserID}
+	return DB.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "user_id"}},
+		DoUpdates: clause.Assignments(map[string]any{
+			"admin_user_id": adminUserID,
+			"updated_at":    common.GetTimestamp(),
+		}),
+	}).Create(&subagent).Error
+}
+
+func DeleteCodexSubagent(userID int) error {
+	if userID <= 0 {
+		return errors.New("user_id is required")
+	}
+	return DB.Delete(&CodexSubagent{}, "user_id = ?", userID).Error
+}
+
+func ListCodexSubagents() ([]CodexSubagentPublic, error) {
+	var subagents []CodexSubagent
+	if err := DB.Order("id desc").Find(&subagents).Error; err != nil {
+		return nil, err
+	}
+	out := make([]CodexSubagentPublic, 0, len(subagents))
+	for _, subagent := range subagents {
+		item := CodexSubagentPublic{CodexSubagent: subagent}
+		var user User
+		if err := DB.Select("id", "username", "display_name", "email").Where("id = ?", subagent.UserID).First(&user).Error; err == nil {
+			item.Username = user.Username
+			item.DisplayName = user.DisplayName
+			item.Email = user.Email
+		}
+		_ = DB.Model(&CodexAccount{}).Where("owner_user_id = ?", subagent.UserID).Count(&item.AccountCount).Error
+		_ = DB.Model(&Token{}).Where("codex_subagent_only = ? AND codex_subagent_owner = ?", true, subagent.UserID).Count(&item.KeyCount).Error
+		var usedQuota int64
+		_ = DB.Model(&Token{}).Where("codex_subagent_only = ? AND codex_subagent_owner = ?", true, subagent.UserID).Select("COALESCE(SUM(used_quota),0)").Scan(&usedQuota).Error
+		item.UsedQuota = usedQuota
+		out = append(out, item)
+	}
+	return out, nil
+}
+
 func UpsertCodexAccountFromOAuthKey(key CodexOAuthCredential, name string, baseURL string, proxy string) (*CodexAccount, error) {
+	return UpsertCodexAccountFromOAuthKeyForOwner(key, name, baseURL, proxy, 0)
+}
+
+func UpsertCodexAccountFromOAuthKeyForOwner(key CodexOAuthCredential, name string, baseURL string, proxy string, ownerUserID int) (*CodexAccount, error) {
 	accountID := strings.TrimSpace(key.AccountID)
 	if accountID == "" {
 		return nil, errors.New("codex account_id is required")
@@ -246,6 +365,7 @@ func UpsertCodexAccountFromOAuthKey(key CodexOAuthCredential, name string, baseU
 	}
 
 	account := CodexAccount{
+		OwnerUserID: ownerUserID,
 		Name:        strings.TrimSpace(name),
 		Email:       strings.TrimSpace(key.Email),
 		AccountID:   accountID,
@@ -259,33 +379,43 @@ func UpsertCodexAccountFromOAuthKey(key CodexOAuthCredential, name string, baseU
 		ExpiredAt:   expiredAt,
 		LastError:   "",
 	}
-	err = DB.Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "account_id"}},
-		DoUpdates: clause.Assignments(map[string]any{
-			"name":         account.Name,
-			"email":        account.Email,
-			"credential":   account.Credential,
-			"base_url":     account.BaseURL,
-			"proxy":        account.Proxy,
-			"priority":     account.Priority,
-			"note":         account.Note,
-			"status":       account.Status,
-			"last_refresh": account.LastRefresh,
-			"expired_at":   account.ExpiredAt,
-			"last_error":   "",
-			"updated_at":   common.GetTimestamp(),
-		}),
-	}).Create(&account).Error
+	err = DB.Transaction(func(tx *gorm.DB) error {
+		var existing CodexAccount
+		err := tx.Where("account_id = ?", accountID).First(&existing).Error
+		if err == nil {
+			if existing.OwnerUserID != ownerUserID {
+				return fmt.Errorf("codex account already belongs to another owner")
+			}
+			return tx.Model(&CodexAccount{}).Where("id = ?", existing.Id).Updates(map[string]any{
+				"name":         account.Name,
+				"email":        account.Email,
+				"credential":   account.Credential,
+				"base_url":     account.BaseURL,
+				"proxy":        account.Proxy,
+				"priority":     account.Priority,
+				"note":         account.Note,
+				"status":       account.Status,
+				"last_refresh": account.LastRefresh,
+				"expired_at":   account.ExpiredAt,
+				"last_error":   "",
+				"updated_at":   common.GetTimestamp(),
+			}).Error
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		return tx.Create(&account).Error
+	})
 	if err != nil {
 		return nil, err
 	}
-	if err := DB.Where("account_id = ?", accountID).First(&account).Error; err != nil {
+	if err := DB.Where("account_id = ? AND owner_user_id = ?", accountID, ownerUserID).First(&account).Error; err != nil {
 		return nil, err
 	}
 	return &account, nil
 }
 
-func normalizeCodexAffinityKey(sessionKey string, model string) string {
+func normalizeCodexAffinityKey(ownerUserID int, sessionKey string, model string) string {
 	sessionKey = strings.TrimSpace(sessionKey)
 	if sessionKey == "" {
 		return ""
@@ -294,7 +424,7 @@ func normalizeCodexAffinityKey(sessionKey string, model string) string {
 	if model == "" {
 		model = "default"
 	}
-	key := "codex::" + model + "::" + sessionKey
+	key := fmt.Sprintf("codex::owner:%d::%s::%s", ownerUserID, model, sessionKey)
 	if len(key) <= 240 {
 		return key
 	}
@@ -322,12 +452,13 @@ func touchSelectedCodexAccount(tx *gorm.DB, account *CodexAccount, now int64) er
 	}).Error
 }
 
-func bindCodexAccountAffinity(tx *gorm.DB, sessionKey string, modelName string, accountID int, now int64) error {
-	sessionKey = normalizeCodexAffinityKey(sessionKey, modelName)
+func bindCodexAccountAffinity(tx *gorm.DB, ownerUserID int, sessionKey string, modelName string, accountID int, now int64) error {
+	sessionKey = normalizeCodexAffinityKey(ownerUserID, sessionKey, modelName)
 	if sessionKey == "" || accountID <= 0 {
 		return nil
 	}
 	affinity := CodexAccountAffinity{
+		OwnerUserID:  ownerUserID,
 		SessionKey:   sessionKey,
 		Model:        truncateCodexAffinityPart(modelName, 128),
 		AccountRowID: accountID,
@@ -345,13 +476,13 @@ func bindCodexAccountAffinity(tx *gorm.DB, sessionKey string, modelName string, 
 }
 
 func selectAvailableCodexAccount(tx *gorm.DB, now int64) (*CodexAccount, error) {
-	return selectAvailableCodexAccountForModel(tx, now, "")
+	return selectAvailableCodexAccountForModel(tx, now, "", 0)
 }
 
-func selectAvailableCodexAccountForModel(tx *gorm.DB, now int64, modelName string) (*CodexAccount, error) {
+func selectAvailableCodexAccountForModel(tx *gorm.DB, now int64, modelName string, ownerUserID int) (*CodexAccount, error) {
 	var account CodexAccount
 	q := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-		Where("status = ? AND (next_retry_time = 0 OR next_retry_time <= ?)", CodexAccountStatusEnabled, now).
+		Where("owner_user_id = ? AND status = ? AND (next_retry_time = 0 OR next_retry_time <= ?)", ownerUserID, CodexAccountStatusEnabled, now).
 		Order("priority desc, last_used_time asc, id asc")
 	modelName = truncateCodexAffinityPart(modelName, 128)
 	if modelName != "" {
@@ -368,17 +499,21 @@ func selectAvailableCodexAccountForModel(tx *gorm.DB, now int64, modelName strin
 }
 
 func SelectCodexAccountForRelay(sessionKey string, modelName string) (*CodexAccount, error) {
+	return SelectCodexAccountForRelayWithOwner(sessionKey, modelName, 0)
+}
+
+func SelectCodexAccountForRelayWithOwner(sessionKey string, modelName string, ownerUserID int) (*CodexAccount, error) {
 	now := common.GetTimestamp()
 	var selected *CodexAccount
 	err := DB.Transaction(func(tx *gorm.DB) error {
-		affinityKey := normalizeCodexAffinityKey(sessionKey, modelName)
+		affinityKey := normalizeCodexAffinityKey(ownerUserID, sessionKey, modelName)
 		if affinityKey != "" {
 			var affinity CodexAccountAffinity
 			err := tx.Where("session_key = ?", affinityKey).First(&affinity).Error
 			if err == nil && affinity.AccountRowID > 0 {
 				var account CodexAccount
 				q := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-					Where("id = ? AND status = ? AND (next_retry_time = 0 OR next_retry_time <= ?)", affinity.AccountRowID, CodexAccountStatusEnabled, now).
+					Where("id = ? AND owner_user_id = ? AND status = ? AND (next_retry_time = 0 OR next_retry_time <= ?)", affinity.AccountRowID, ownerUserID, CodexAccountStatusEnabled, now).
 					Limit(1)
 				modelKey := truncateCodexAffinityPart(modelName, 128)
 				if modelKey != "" {
@@ -401,14 +536,14 @@ func SelectCodexAccountForRelay(sessionKey string, modelName string) (*CodexAcco
 			}
 		}
 
-		account, err := selectAvailableCodexAccountForModel(tx, now, modelName)
+		account, err := selectAvailableCodexAccountForModel(tx, now, modelName, ownerUserID)
 		if err != nil {
 			return err
 		}
 		if err = touchSelectedCodexAccount(tx, account, now); err != nil {
 			return err
 		}
-		if err = bindCodexAccountAffinity(tx, sessionKey, modelName, account.Id, now); err != nil {
+		if err = bindCodexAccountAffinity(tx, ownerUserID, sessionKey, modelName, account.Id, now); err != nil {
 			return err
 		}
 		selected = account

@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	BillingSourceWallet       = "wallet"
-	BillingSourceSubscription = "subscription"
+	BillingSourceWallet           = "wallet"
+	BillingSourceSubscription     = "subscription"
+	BillingSourceCodexSubagentKey = "codex_subagent_key"
 
 	apiWalletOnlyMinUSD = 4.0
 )
@@ -22,7 +23,7 @@ const (
 // EnforceLowBalanceAPIRestriction blocks direct API usage for low-balance users
 // without an active subscription. Playground requests are intentionally allowed.
 func EnforceLowBalanceAPIRestriction(c *gin.Context, relayInfo *relaycommon.RelayInfo) *types.NewAPIError {
-	if relayInfo == nil || relayInfo.UserId <= 0 || relayInfo.IsPlayground {
+	if relayInfo == nil || relayInfo.UserId <= 0 || relayInfo.IsPlayground || relayInfo.CodexSubagentKey {
 		return nil
 	}
 	if model.IsAdmin(relayInfo.UserId) {

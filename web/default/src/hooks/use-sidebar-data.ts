@@ -52,6 +52,11 @@ export function useSidebarData(): SidebarData {
             url: '/keys',
             icon: Key,
           },
+          {
+            title: t('Codex 账号托管'),
+            url: '/codex-accounts',
+            icon: Bot,
+          },
         ],
       },
       {
@@ -100,11 +105,6 @@ export function useSidebarData(): SidebarData {
             title: t('渠道测试场'),
             url: '/channel-lab',
             icon: FlaskConical,
-          },
-          {
-            title: t('Codex 账号管理'),
-            url: '/codex-accounts',
-            icon: Bot,
           },
           {
             title: t('Models'),

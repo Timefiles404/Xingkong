@@ -22,6 +22,16 @@ type FundingSource interface {
 	Refund() error
 }
 
+// TokenOnlyFunding is used by Codex subagent proxy keys. The hosted account
+// belongs to the subagent, but billing limit is enforced only on the generated
+// token itself, so the subagent's personal wallet/subscription is not charged.
+type TokenOnlyFunding struct{}
+
+func (t *TokenOnlyFunding) Source() string              { return BillingSourceCodexSubagentKey }
+func (t *TokenOnlyFunding) PreConsume(amount int) error { return nil }
+func (t *TokenOnlyFunding) Settle(delta int) error      { return nil }
+func (t *TokenOnlyFunding) Refund() error               { return nil }
+
 // ---------------------------------------------------------------------------
 // WalletFunding — 钱包资金来源实现
 // ---------------------------------------------------------------------------

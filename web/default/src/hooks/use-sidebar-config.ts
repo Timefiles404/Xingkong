@@ -22,6 +22,7 @@ const DEFAULT_SIDEBAR_MODULES: SidebarModulesAdminConfig = {
     enabled: true,
     playground: true,
     token: true,
+    codex: true,
   },
   data: {
     enabled: true,
@@ -52,6 +53,7 @@ const URL_TO_CONFIG_MAP: Record<string, { section: string; module: string }> = {
   '/playground': { section: 'usage', module: 'playground' },
   '/playground/images': { section: 'usage', module: 'playground' },
   '/keys': { section: 'usage', module: 'token' },
+  '/codex-accounts': { section: 'usage', module: 'codex' },
   '/dashboard': { section: 'data', module: 'detail' },
   '/dashboard/overview': { section: 'data', module: 'detail' },
   '/dashboard/models': { section: 'data', module: 'detail' },

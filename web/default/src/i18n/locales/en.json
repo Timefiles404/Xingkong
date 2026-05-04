@@ -4305,6 +4305,7 @@
     "Match by required model fields, ignoring vendor prefixes and separators": "Match by required model fields, ignoring vendor prefixes and separators",
     "Upstream Models *": "Upstream Models *",
     "Upstream raw model IDs supported by this channel. They are clustered into user-facing models automatically.": "Upstream raw model IDs supported by this channel. They are clustered into user-facing models automatically.",
-    "Matched upstream model": "Matched upstream model"
+    "Matched upstream model": "Matched upstream model",
+    "Codex 账号托管": "Codex Hosting"
   }
 }
