@@ -300,6 +300,23 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 			AutoBan: &autoBanInt,
 		}, nil
 	}
+
+	if info.CodexSubagentKey || info.ChannelMeta.ChannelType == constant.ChannelTypeCodex {
+		channel, err := model.GetCodexPoolChannel()
+		if err != nil {
+			return nil, types.NewError(fmt.Errorf("Codex 官方渠道不可用（retry）: %s", err.Error()), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		}
+		if channel == nil || channel.Status != common.ChannelStatusEnabled {
+			return nil, types.NewError(errors.New("Codex 官方渠道已禁用（retry）"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		}
+		newAPIError := middleware.SetupContextForSelectedChannel(c, channel, info.OriginModelName)
+		if newAPIError != nil {
+			return nil, newAPIError
+		}
+		info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)
+		return channel, nil
+	}
+
 	channel, selectGroup, err := service.CacheGetRandomSatisfiedChannel(retryParam)
 
 	info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)
