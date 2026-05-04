@@ -34,12 +34,13 @@ type codexAccountImportRequest struct {
 }
 
 type codexAccountUpdateRequest struct {
-	Name     *string `json:"name"`
-	BaseURL  *string `json:"base_url"`
-	Proxy    *string `json:"proxy"`
-	Priority *int    `json:"priority"`
-	Note     *string `json:"note"`
-	Status   *int    `json:"status"`
+	Name           *string `json:"name"`
+	BaseURL        *string `json:"base_url"`
+	Proxy          *string `json:"proxy"`
+	Priority       *int    `json:"priority"`
+	MaxConcurrency *int    `json:"max_concurrency"`
+	Note           *string `json:"note"`
+	Status         *int    `json:"status"`
 }
 
 type codexSubagentRequest struct {
@@ -53,6 +54,7 @@ type codexProxyKeyRequest struct {
 	ExpiredTime    int64  `json:"expired_time"`
 	Status         int    `json:"status"`
 	OwnerUserID    int    `json:"owner_user_id"`
+	RPMLimit       int    `json:"rpm_limit"`
 }
 
 func codexAccountOAuthSessionKey(field string) string {
@@ -345,6 +347,16 @@ func UpdateCodexAccount(c *gin.Context) {
 	if req.Priority != nil {
 		updates["priority"] = *req.Priority
 	}
+	if req.MaxConcurrency != nil {
+		maxConcurrency := *req.MaxConcurrency
+		if maxConcurrency <= 0 {
+			maxConcurrency = 1
+		}
+		if maxConcurrency > 20 {
+			maxConcurrency = 20
+		}
+		updates["max_concurrency"] = maxConcurrency
+	}
 	if req.Note != nil {
 		updates["note"] = strings.TrimSpace(*req.Note)
 	}
@@ -542,6 +554,10 @@ func CreateCodexProxyKey(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "额度不能为负数"})
 		return
 	}
+	if req.RPMLimit < 0 {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "RPM 不能为负数"})
+		return
+	}
 	key, err := common.GenerateKey()
 	if err != nil {
 		common.ApiError(c, err)
@@ -560,6 +576,7 @@ func CreateCodexProxyKey(c *gin.Context) {
 		ModelLimitsEnabled: true,
 		ModelLimits:        strings.Join(model.CodexOfficialModelList(), ","),
 		Group:              "default",
+		RPMLimit:           req.RPMLimit,
 		CodexSubagentOnly:  true,
 		CodexSubagentOwner: ownerUserID,
 	}
@@ -614,10 +631,15 @@ func UpdateCodexProxyKey(c *gin.Context) {
 	if req.Status != 0 {
 		token.Status = req.Status
 	}
+	if req.RPMLimit < 0 {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "RPM 不能为负数"})
+		return
+	}
 	token.UnlimitedQuota = req.UnlimitedQuota
 	token.ModelLimitsEnabled = true
 	token.ModelLimits = strings.Join(model.CodexOfficialModelList(), ",")
 	token.Group = "default"
+	token.RPMLimit = req.RPMLimit
 	token.CodexSubagentOnly = true
 	token.CodexSubagentOwner = token.UserId
 	if err := token.Update(); err != nil {
@@ -753,12 +775,16 @@ func GetCodexProxyStats(c *gin.Context) {
 			byToken[log.TokenId] = item
 		}
 		cacheTokens := int64(extractCodexCacheTokens(log.Other))
-		item.PromptTokens += int64(log.PromptTokens)
+		nonCachedPrompt := int64(log.PromptTokens) - cacheTokens
+		if nonCachedPrompt < 0 {
+			nonCachedPrompt = 0
+		}
+		item.PromptTokens += nonCachedPrompt
 		item.CompletionTokens += int64(log.CompletionTokens)
 		item.CacheTokens += cacheTokens
 		item.Quota += int64(log.Quota)
 		item.Requests++
-		total.PromptTokens += int64(log.PromptTokens)
+		total.PromptTokens += nonCachedPrompt
 		total.CompletionTokens += int64(log.CompletionTokens)
 		total.CacheTokens += cacheTokens
 		total.Quota += int64(log.Quota)
@@ -777,7 +803,10 @@ func extractCodexCacheTokens(raw string) int {
 		return 0
 	}
 	total := numericMapValue(other, "cache_tokens")
-	total += numericMapValue(other, "cache_write_tokens")
+	if cacheWrite := numericMapValue(other, "cache_write_tokens"); cacheWrite > 0 {
+		total += cacheWrite
+		return total
+	}
 	total += numericMapValue(other, "cache_creation_tokens")
 	total += numericMapValue(other, "cache_creation_tokens_5m")
 	total += numericMapValue(other, "cache_creation_tokens_1h")

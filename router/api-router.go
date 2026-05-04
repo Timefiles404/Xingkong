@@ -293,6 +293,9 @@ func SetApiRouter(router *gin.Engine) {
 		{
 			codexMarketRoute.GET("/products", controller.ListCodexMarketProducts)
 			codexMarketRoute.POST("/redeem", controller.RedeemCodexMarketCode)
+			codexMarketRoute.POST("/payments", controller.SubmitCodexMarketPayment)
+			codexMarketRoute.GET("/my_payments", controller.ListMyCodexMarketPayments)
+			codexMarketRoute.POST("/my_payments/:id/key", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.GetMyCodexMarketPaymentKeySecret)
 			codexMarketRoute.GET("/my_keys", controller.ListMyCodexMarketKeys)
 			codexMarketRoute.POST("/my_keys/:id/key", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.GetMyCodexMarketKeySecret)
 			codexMarketRoute.GET("/seller/products", controller.ListMyCodexMarketProducts)
@@ -301,6 +304,10 @@ func SetApiRouter(router *gin.Engine) {
 			codexMarketRoute.DELETE("/seller/products/:id", controller.DeleteCodexMarketProduct)
 			codexMarketRoute.GET("/seller/codes", controller.ListCodexMarketCodes)
 			codexMarketRoute.POST("/seller/codes", controller.GenerateCodexMarketCodes)
+			codexMarketRoute.GET("/seller/codes/export", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.ExportCodexMarketCodes)
+			codexMarketRoute.POST("/seller/codes/:id/disable", controller.DisableCodexMarketCode)
+			codexMarketRoute.GET("/seller/payments", controller.ListSellerCodexMarketPayments)
+			codexMarketRoute.POST("/seller/payments/:id/review", controller.ReviewCodexMarketPayment)
 		}
 		channelLabRoute := apiRouter.Group("/channel_lab")
 		channelLabRoute.Use(middleware.AdminAuth())

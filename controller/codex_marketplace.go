@@ -15,26 +15,41 @@ import (
 )
 
 type codexMarketProductRequest struct {
-	SellerID    int    `json:"seller_id"`
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	Models      string `json:"models"`
-	Quota       int    `json:"quota"`
-	PaymentType string `json:"payment_type"`
-	PaymentText string `json:"payment_text"`
-	PaymentURL  string `json:"payment_url"`
-	Status      int    `json:"status"`
+	SellerID           int    `json:"seller_id"`
+	Title              string `json:"title"`
+	Description        string `json:"description"`
+	Models             string `json:"models"`
+	Quota              int    `json:"quota"`
+	KeyRPM             int    `json:"key_rpm"`
+	PaymentType        string `json:"payment_type"`
+	PaymentText        string `json:"payment_text"`
+	PaymentURL         string `json:"payment_url"`
+	PaymentConfirmText string `json:"payment_confirm_text"`
+	Status             int    `json:"status"`
 }
 
 type codexMarketGenerateCodesRequest struct {
 	ProductID int   `json:"product_id"`
 	Count     int   `json:"count"`
 	Quota     int   `json:"quota"`
+	KeyRPM    int   `json:"key_rpm"`
 	ExpiredAt int64 `json:"expired_at"`
 }
 
 type codexMarketRedeemRequest struct {
 	Code string `json:"code"`
+}
+
+type codexMarketPaymentRequest struct {
+	ProductID int    `json:"product_id"`
+	Contact   string `json:"contact"`
+	Proof     string `json:"proof"`
+	Message   string `json:"message"`
+}
+
+type codexMarketReviewPaymentRequest struct {
+	Status  int    `json:"status"`
+	Message string `json:"message"`
 }
 
 func sanitizeCodexMarketModels(raw string) string {
@@ -138,16 +153,22 @@ func CreateCodexMarketProduct(c *gin.Context) {
 		common.ApiErrorMsg(c, "额度不能为负数")
 		return
 	}
+	if req.KeyRPM < 0 {
+		common.ApiErrorMsg(c, "RPM 不能为负数")
+		return
+	}
 	product := model.CodexMarketProduct{
-		SellerID:    sellerID,
-		Title:       title,
-		Description: strings.TrimSpace(req.Description),
-		Models:      sanitizeCodexMarketModels(req.Models),
-		Quota:       req.Quota,
-		PaymentType: strings.TrimSpace(req.PaymentType),
-		PaymentText: strings.TrimSpace(req.PaymentText),
-		PaymentURL:  strings.TrimSpace(req.PaymentURL),
-		Status:      status,
+		SellerID:           sellerID,
+		Title:              title,
+		Description:        strings.TrimSpace(req.Description),
+		Models:             sanitizeCodexMarketModels(req.Models),
+		Quota:              req.Quota,
+		KeyRPM:             req.KeyRPM,
+		PaymentType:        strings.TrimSpace(req.PaymentType),
+		PaymentText:        strings.TrimSpace(req.PaymentText),
+		PaymentURL:         strings.TrimSpace(req.PaymentURL),
+		PaymentConfirmText: strings.TrimSpace(req.PaymentConfirmText),
+		Status:             status,
 	}
 	if err := model.DB.Create(&product).Error; err != nil {
 		common.ApiError(c, err)
@@ -184,11 +205,15 @@ func UpdateCodexMarketProduct(c *gin.Context) {
 	if req.Quota >= 0 {
 		product.Quota = req.Quota
 	}
+	if req.KeyRPM >= 0 {
+		product.KeyRPM = req.KeyRPM
+	}
 	if strings.TrimSpace(req.PaymentType) != "" {
 		product.PaymentType = strings.TrimSpace(req.PaymentType)
 	}
 	product.PaymentText = strings.TrimSpace(req.PaymentText)
 	product.PaymentURL = strings.TrimSpace(req.PaymentURL)
+	product.PaymentConfirmText = strings.TrimSpace(req.PaymentConfirmText)
 	if req.Status == model.CodexMarketProductListed || req.Status == model.CodexMarketProductUnlisted {
 		product.Status = req.Status
 	}
@@ -247,7 +272,16 @@ func GenerateCodexMarketCodes(c *gin.Context) {
 		common.ApiErrorMsg(c, "兑换额度必须大于 0")
 		return
 	}
+	keyRPM := req.KeyRPM
+	if keyRPM < 0 {
+		common.ApiErrorMsg(c, "RPM 不能为负数")
+		return
+	}
+	if keyRPM == 0 {
+		keyRPM = product.KeyRPM
+	}
 	codes := make([]string, 0, req.Count)
+	batchID := fmt.Sprintf("batch-%d-%s", common.GetTimestamp(), common.GetRandomString(8))
 	err = model.DB.Transaction(func(tx *gorm.DB) error {
 		for i := 0; i < req.Count; i++ {
 			random, err := common.GenerateRandomCharsKey(20)
@@ -258,9 +292,12 @@ func GenerateCodexMarketCodes(c *gin.Context) {
 			code := model.CodexMarketCode{
 				ProductID:   product.Id,
 				SellerID:    product.SellerID,
+				BatchID:     batchID,
 				CodeHash:    model.HashCodexMarketCode(plain),
+				PlainCode:   plain,
 				CodePreview: model.MaskCodexMarketCode(plain),
 				Quota:       quota,
+				KeyRPM:      keyRPM,
 				Status:      model.CodexMarketCodeUnused,
 				ExpiredAt:   req.ExpiredAt,
 			}
@@ -302,6 +339,56 @@ func ListCodexMarketCodes(c *gin.Context) {
 	common.ApiSuccess(c, codes)
 }
 
+func ExportCodexMarketCodes(c *gin.Context) {
+	sellerID, isAdmin, ok := codexMarketSellerScope(c)
+	if !ok {
+		return
+	}
+	tx := model.DB.Model(&model.CodexMarketCode{})
+	if !isAdmin || c.Query("seller_id") != "" {
+		tx = tx.Where("seller_id = ?", sellerID)
+	}
+	if productID, _ := strconv.Atoi(c.Query("product_id")); productID > 0 {
+		tx = tx.Where("product_id = ?", productID)
+	}
+	if batchID := strings.TrimSpace(c.Query("batch_id")); batchID != "" {
+		tx = tx.Where("batch_id = ?", batchID)
+	}
+	var codes []model.CodexMarketCode
+	if err := tx.Order("id desc").Limit(2000).Find(&codes).Error; err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	out := make([]string, 0, len(codes))
+	for _, code := range codes {
+		if strings.TrimSpace(code.PlainCode) != "" {
+			out = append(out, code.PlainCode)
+		}
+	}
+	common.ApiSuccess(c, gin.H{"codes": out})
+}
+
+func DisableCodexMarketCode(c *gin.Context) {
+	sellerID, isAdmin, ok := codexMarketSellerScope(c)
+	if !ok {
+		return
+	}
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	tx := model.DB.Model(&model.CodexMarketCode{}).Where("id = ? AND status = ?", id, model.CodexMarketCodeUnused)
+	if !isAdmin {
+		tx = tx.Where("seller_id = ?", sellerID)
+	}
+	if err := tx.Updates(map[string]any{"status": model.CodexMarketCodeDisabled}).Error; err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, nil)
+}
+
 func RedeemCodexMarketCode(c *gin.Context) {
 	userID := c.GetInt("id")
 	req := codexMarketRedeemRequest{}
@@ -336,28 +423,8 @@ func RedeemCodexMarketCode(c *gin.Context) {
 		if err := tx.Where("id = ?", code.ProductID).First(&product).Error; err != nil {
 			return err
 		}
-		key, err := common.GenerateKey()
+		token, key, err := createCodexMarketTokenTx(tx, code.SellerID, "市场兑换-"+product.Title, code.Quota, code.KeyRPM, product.Models)
 		if err != nil {
-			return err
-		}
-		models := sanitizeCodexMarketModels(product.Models)
-		token := model.Token{
-			UserId:             code.SellerID,
-			Name:               "市场兑换-" + product.Title,
-			Key:                key,
-			Status:             common.TokenStatusEnabled,
-			CreatedTime:        now,
-			AccessedTime:       now,
-			ExpiredTime:        -1,
-			RemainQuota:        code.Quota,
-			UnlimitedQuota:     false,
-			ModelLimitsEnabled: true,
-			ModelLimits:        models,
-			Group:              "default",
-			CodexSubagentOnly:  true,
-			CodexSubagentOwner: code.SellerID,
-		}
-		if err := tx.Create(&token).Error; err != nil {
 			return err
 		}
 		if err := tx.Model(&model.CodexMarketCode{}).Where("id = ? AND status = ?", code.Id, model.CodexMarketCodeUnused).Updates(map[string]any{
@@ -369,7 +436,7 @@ func RedeemCodexMarketCode(c *gin.Context) {
 			return err
 		}
 		fullKey = "sk-" + key
-		purchased = buildCodexMarketPurchasedKey(code, product, token)
+		purchased = buildCodexMarketPurchasedKey(code, product, *token)
 		return nil
 	})
 	if err != nil {
@@ -397,6 +464,160 @@ func ListMyCodexMarketKeys(c *gin.Context) {
 		items = append(items, buildCodexMarketPurchasedKey(code, product, token))
 	}
 	common.ApiSuccess(c, items)
+}
+
+func SubmitCodexMarketPayment(c *gin.Context) {
+	userID := c.GetInt("id")
+	req := codexMarketPaymentRequest{}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	var product model.CodexMarketProduct
+	if err := model.DB.Where("id = ? AND status = ?", req.ProductID, model.CodexMarketProductListed).First(&product).Error; err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if userID == product.SellerID {
+		common.ApiErrorMsg(c, "不能购买自己的商品")
+		return
+	}
+	payment := model.CodexMarketPayment{
+		ProductID: product.Id,
+		SellerID:  product.SellerID,
+		BuyerID:   userID,
+		Contact:   strings.TrimSpace(req.Contact),
+		Proof:     strings.TrimSpace(req.Proof),
+		Message:   strings.TrimSpace(req.Message),
+		Quota:     product.Quota,
+		KeyRPM:    product.KeyRPM,
+		Status:    model.CodexMarketPaymentPending,
+	}
+	if payment.Contact == "" && payment.Proof == "" {
+		common.ApiErrorMsg(c, "请填写联系方式或支付凭证")
+		return
+	}
+	if err := model.DB.Create(&payment).Error; err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, buildCodexMarketPaymentPublic(payment))
+}
+
+func ListMyCodexMarketPayments(c *gin.Context) {
+	userID := c.GetInt("id")
+	var payments []model.CodexMarketPayment
+	if err := model.DB.Where("buyer_id = ?", userID).Order("id desc").Limit(200).Find(&payments).Error; err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	items := make([]model.CodexMarketPaymentPublic, 0, len(payments))
+	for _, payment := range payments {
+		items = append(items, buildCodexMarketPaymentPublic(payment))
+	}
+	common.ApiSuccess(c, items)
+}
+
+func GetMyCodexMarketPaymentKeySecret(c *gin.Context) {
+	userID := c.GetInt("id")
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	var payment model.CodexMarketPayment
+	if err := model.DB.Where("id = ? AND buyer_id = ? AND token_id > 0 AND status = ?", id, userID, model.CodexMarketPaymentApproved).First(&payment).Error; err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	var token model.Token
+	if err := model.DB.Where("id = ?", payment.TokenID).First(&token).Error; err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, gin.H{"key": "sk-" + token.Key})
+}
+
+func ListSellerCodexMarketPayments(c *gin.Context) {
+	sellerID, isAdmin, ok := codexMarketSellerScope(c)
+	if !ok {
+		return
+	}
+	tx := model.DB.Model(&model.CodexMarketPayment{})
+	if !isAdmin || c.Query("seller_id") != "" {
+		tx = tx.Where("seller_id = ?", sellerID)
+	}
+	if status, _ := strconv.Atoi(c.Query("status")); status > 0 {
+		tx = tx.Where("status = ?", status)
+	}
+	var payments []model.CodexMarketPayment
+	if err := tx.Order("id desc").Limit(500).Find(&payments).Error; err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	items := make([]model.CodexMarketPaymentPublic, 0, len(payments))
+	for _, payment := range payments {
+		items = append(items, buildCodexMarketPaymentPublic(payment))
+	}
+	common.ApiSuccess(c, items)
+}
+
+func ReviewCodexMarketPayment(c *gin.Context) {
+	sellerID, isAdmin, ok := codexMarketSellerScope(c)
+	if !ok {
+		return
+	}
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	req := codexMarketReviewPaymentRequest{}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if req.Status != model.CodexMarketPaymentApproved && req.Status != model.CodexMarketPaymentRejected {
+		common.ApiErrorMsg(c, "无效审核状态")
+		return
+	}
+	var fullKey string
+	err = model.DB.Transaction(func(tx *gorm.DB) error {
+		var payment model.CodexMarketPayment
+		query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", id)
+		if !isAdmin {
+			query = query.Where("seller_id = ?", sellerID)
+		}
+		if err := query.First(&payment).Error; err != nil {
+			return err
+		}
+		if payment.Status != model.CodexMarketPaymentPending {
+			return fmt.Errorf("该支付确认已处理")
+		}
+		updates := map[string]any{
+			"status":      req.Status,
+			"message":     strings.TrimSpace(req.Message),
+			"reviewed_at": common.GetTimestamp(),
+		}
+		if req.Status == model.CodexMarketPaymentApproved {
+			var product model.CodexMarketProduct
+			if err := tx.Where("id = ?", payment.ProductID).First(&product).Error; err != nil {
+				return err
+			}
+			token, key, err := createCodexMarketTokenTx(tx, payment.SellerID, "市场支付-"+product.Title, payment.Quota, payment.KeyRPM, product.Models)
+			if err != nil {
+				return err
+			}
+			updates["token_id"] = token.Id
+			fullKey = "sk-" + key
+		}
+		return tx.Model(&model.CodexMarketPayment{}).Where("id = ?", payment.Id).Updates(updates).Error
+	})
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, gin.H{"key": fullKey})
 }
 
 func GetMyCodexMarketKeySecret(c *gin.Context) {
@@ -433,6 +654,7 @@ func buildCodexMarketPurchasedKey(code model.CodexMarketCode, product model.Code
 		UsedQuota:      token.UsedQuota,
 		UnlimitedQuota: token.UnlimitedQuota,
 		ModelLimits:    token.ModelLimits,
+		RPMLimit:       token.RPMLimit,
 		CreatedTime:    token.CreatedTime,
 		AccessedTime:   token.AccessedTime,
 		RedeemedAt:     code.RedeemedAt,
@@ -441,6 +663,64 @@ func buildCodexMarketPurchasedKey(code model.CodexMarketCode, product model.Code
 	if err := model.DB.Select("id", "username", "display_name").Where("id = ?", code.SellerID).First(&seller).Error; err == nil {
 		out.SellerUsername = seller.Username
 		out.SellerDisplayName = seller.DisplayName
+	}
+	return out
+}
+
+func createCodexMarketTokenTx(tx *gorm.DB, sellerID int, name string, quota int, rpm int, modelsRaw string) (*model.Token, string, error) {
+	if tx == nil {
+		tx = model.DB
+	}
+	key, err := common.GenerateKey()
+	if err != nil {
+		return nil, "", err
+	}
+	if rpm < 0 {
+		rpm = 0
+	}
+	token := model.Token{
+		UserId:             sellerID,
+		Name:               name,
+		Key:                key,
+		Status:             common.TokenStatusEnabled,
+		CreatedTime:        common.GetTimestamp(),
+		AccessedTime:       common.GetTimestamp(),
+		ExpiredTime:        -1,
+		RemainQuota:        quota,
+		UnlimitedQuota:     false,
+		ModelLimitsEnabled: true,
+		ModelLimits:        sanitizeCodexMarketModels(modelsRaw),
+		Group:              "default",
+		RPMLimit:           rpm,
+		CodexSubagentOnly:  true,
+		CodexSubagentOwner: sellerID,
+	}
+	if err := tx.Create(&token).Error; err != nil {
+		return nil, "", err
+	}
+	return &token, key, nil
+}
+
+func buildCodexMarketPaymentPublic(payment model.CodexMarketPayment) model.CodexMarketPaymentPublic {
+	out := model.CodexMarketPaymentPublic{CodexMarketPayment: payment}
+	var product model.CodexMarketProduct
+	if err := model.DB.Select("id", "title").Where("id = ?", payment.ProductID).First(&product).Error; err == nil {
+		out.ProductTitle = product.Title
+	}
+	var buyer model.User
+	if err := model.DB.Select("id", "username", "display_name").Where("id = ?", payment.BuyerID).First(&buyer).Error; err == nil {
+		out.BuyerUsername = buyer.Username
+		out.BuyerDisplayName = buyer.DisplayName
+	}
+	if payment.TokenID > 0 {
+		var token model.Token
+		if err := model.DB.Where("id = ?", payment.TokenID).First(&token).Error; err == nil {
+			out.TokenName = token.Name
+			out.MaskedKey = token.GetMaskedKey()
+			out.RemainQuota = token.RemainQuota
+			out.UsedQuota = token.UsedQuota
+			out.UnlimitedQuota = token.UnlimitedQuota
+		}
 	}
 	return out
 }

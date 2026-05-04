@@ -256,16 +256,19 @@ export function CodexAccounts() {
   const [subagentUserId, setSubagentUserId] = useState('')
   const [keyName, setKeyName] = useState('Codex 托管密钥')
   const [keyUsd, setKeyUsd] = useState('100')
+  const [keyRpm, setKeyRpm] = useState('0')
   const [keyUnlimited, setKeyUnlimited] = useState(false)
   const [editingAccount, setEditingAccount] = useState<CodexAccount | null>(null)
   const [editName, setEditName] = useState('')
   const [editBaseUrl, setEditBaseUrl] = useState('')
   const [editProxy, setEditProxy] = useState('')
   const [editPriority, setEditPriority] = useState('0')
+  const [editMaxConcurrency, setEditMaxConcurrency] = useState('1')
   const [editNote, setEditNote] = useState('')
   const [editKey, setEditKey] = useState<CodexProxyKey | null>(null)
   const [editKeyName, setEditKeyName] = useState('')
   const [editKeyUsd, setEditKeyUsd] = useState('')
+  const [editKeyRpm, setEditKeyRpm] = useState('0')
   const [editKeyUnlimited, setEditKeyUnlimited] = useState(false)
 
   const isAdmin = !!access?.is_admin
@@ -425,6 +428,7 @@ export function CodexAccounts() {
       unlimited_quota: keyUnlimited,
       expired_time: -1,
       owner_user_id: ownerForRequest,
+      rpm_limit: Math.max(0, Number.parseInt(keyRpm, 10) || 0),
     })
     if (!res.success) {
       toast.error(res.message || '创建失败')
@@ -435,6 +439,7 @@ export function CodexAccounts() {
       toast.success('密钥已创建并复制')
     }
     setKeyOpen(false)
+    setKeyRpm('0')
     await load()
   }
 
@@ -446,6 +451,7 @@ export function CodexAccounts() {
       unlimited_quota: editKeyUnlimited,
       expired_time: editKey.expired_time,
       status: editKey.status,
+      rpm_limit: Math.max(0, Number.parseInt(editKeyRpm, 10) || 0),
     })
     if (!res.success) {
       toast.error(res.message || '保存失败')
@@ -471,6 +477,7 @@ export function CodexAccounts() {
     setEditBaseUrl(account.base_url || 'https://chatgpt.com')
     setEditProxy(account.proxy || '')
     setEditPriority(String(account.priority || 0))
+    setEditMaxConcurrency(String(account.max_concurrency || 1))
     setEditNote(account.note || '')
     setEditOpen(true)
   }
@@ -488,6 +495,7 @@ export function CodexAccounts() {
   const saveAccount = async () => {
     if (!editingAccount) return
     const priority = Number.parseInt(editPriority, 10)
+    const maxConcurrency = Number.parseInt(editMaxConcurrency, 10)
     setSavingAccount(true)
     try {
       const res = await updateCodexAccount(editingAccount.id, {
@@ -495,6 +503,7 @@ export function CodexAccounts() {
         base_url: editBaseUrl,
         proxy: editProxy,
         priority: Number.isFinite(priority) ? priority : 0,
+        max_concurrency: Number.isFinite(maxConcurrency) ? Math.max(1, Math.min(20, maxConcurrency)) : 1,
         note: editNote,
       })
       if (!res.success) {
@@ -831,6 +840,9 @@ export function CodexAccounts() {
                           </TableCell>
                           <TableCell>
                             <div className='text-sm'>{account.priority || 0}</div>
+                            <div className='text-muted-foreground text-xs'>
+                              并发 {account.active_requests || 0}/{account.max_concurrency || 1}
+                            </div>
                             <div className='text-muted-foreground max-w-[180px] truncate text-xs'>
                               {account.note || '-'}
                             </div>
@@ -928,6 +940,8 @@ export function CodexAccounts() {
                       <Input value={keyName} onChange={(e) => setKeyName(e.target.value)} />
                       <Label>托管额度限制（USD 面值，仅限制此 key）</Label>
                       <Input value={keyUsd} onChange={(e) => setKeyUsd(e.target.value)} />
+                      <Label>RPM 限制（0 为不限）</Label>
+                      <Input value={keyRpm} onChange={(e) => setKeyRpm(e.target.value)} />
                       <label className='flex items-center gap-2 text-sm'>
                         <input
                           type='checkbox'
@@ -975,24 +989,26 @@ export function CodexAccounts() {
                           <TableRow key={key.id}>
                             <TableCell>
                               <div className='font-medium'>{key.name}</div>
-                              <div className='text-muted-foreground text-xs'>{key.key}</div>
+                              <div className='text-muted-foreground text-xs'>
+                                {key.key} · RPM {key.rpm_limit || '不限'}
+                              </div>
                             </TableCell>
-                              <TableCell>
-                                <Badge variant={key.status === 1 ? 'default' : 'secondary'}>
-                                  {key.status === 1 ? '启用' : '停用'}
-                                </Badge>
-                              </TableCell>
-                              <TableCell>
-                                <ProxyKeyQuotaUsage tokenKey={key} />
-                              </TableCell>
-                              <TableCell>{formatTime(key.accessed_time)}</TableCell>
-                              <TableCell className='min-w-[180px] text-xs'>
-                                <ProxyKeyTokenUsage
-                                  promptTokens={keyStat?.prompt_tokens}
-                                  completionTokens={keyStat?.completion_tokens}
-                                  cacheTokens={keyStat?.cache_tokens}
-                                />
-                              </TableCell>
+                            <TableCell>
+                              <Badge variant={key.status === 1 ? 'default' : 'secondary'}>
+                                {key.status === 1 ? '启用' : '停用'}
+                              </Badge>
+                            </TableCell>
+                            <TableCell>
+                              <ProxyKeyQuotaUsage tokenKey={key} />
+                            </TableCell>
+                            <TableCell>{formatTime(key.accessed_time)}</TableCell>
+                            <TableCell className='min-w-[180px] text-xs'>
+                              <ProxyKeyTokenUsage
+                                promptTokens={keyStat?.prompt_tokens}
+                                completionTokens={keyStat?.completion_tokens}
+                                cacheTokens={keyStat?.cache_tokens}
+                              />
+                            </TableCell>
                             <TableCell className='space-x-1 text-right'>
                               <Button variant='ghost' size='sm' onClick={() => copyKey(key.id)}>
                                 复制
@@ -1004,6 +1020,7 @@ export function CodexAccounts() {
                                   setEditKey(key)
                                   setEditKeyName(key.name)
                                   setEditKeyUsd(quotaToUsd(key.remain_quota))
+                                  setEditKeyRpm(String(key.rpm_limit || 0))
                                   setEditKeyUnlimited(key.unlimited_quota)
                                 }}
                               >
@@ -1019,6 +1036,7 @@ export function CodexAccounts() {
                                     remain_quota: key.remain_quota,
                                     unlimited_quota: key.unlimited_quota,
                                     expired_time: key.expired_time,
+                                    rpm_limit: key.rpm_limit,
                                   })
                                   await load()
                                 }}
@@ -1149,6 +1167,8 @@ export function CodexAccounts() {
               <Input value={editProxy} onChange={(e) => setEditProxy(e.target.value)} />
               <Label>优先级（数字越大越优先）</Label>
               <Input value={editPriority} onChange={(e) => setEditPriority(e.target.value)} />
+              <Label>最大并发（默认 1，最高 20）</Label>
+              <Input value={editMaxConcurrency} onChange={(e) => setEditMaxConcurrency(e.target.value)} />
               <Label>备注</Label>
               <Textarea value={editNote} onChange={(e) => setEditNote(e.target.value)} />
             </div>
@@ -1173,6 +1193,8 @@ export function CodexAccounts() {
             <Input value={editKeyName} onChange={(e) => setEditKeyName(e.target.value)} />
             <Label>剩余托管额度（USD 面值）</Label>
             <Input value={editKeyUsd} onChange={(e) => setEditKeyUsd(e.target.value)} />
+            <Label>RPM 限制（0 为不限）</Label>
+            <Input value={editKeyRpm} onChange={(e) => setEditKeyRpm(e.target.value)} />
             <label className='flex items-center gap-2 text-sm'>
               <input
                 type='checkbox'

@@ -572,6 +572,11 @@ func detectImageMimeType(filename string) string {
 }
 
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
+	if request.MaxOutputTokens != nil && *request.MaxOutputTokens > 128000 {
+		// Some upstream Responses endpoints hard-reject larger values. Dropping the
+		// field lets upstream apply its own model default instead of failing the call.
+		request.MaxOutputTokens = nil
+	}
 	//  转换模型推理力度后缀
 	effort, originModel := reasoning.ParseOpenAIReasoningEffortFromModelSuffix(request.Model)
 	if effort != "" {

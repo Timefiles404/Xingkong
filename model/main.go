@@ -293,6 +293,7 @@ func migrateDB() error {
 		&CodexAccountModelState{},
 		&CodexMarketProduct{},
 		&CodexMarketCode{},
+		&CodexMarketPayment{},
 	)
 	if err != nil {
 		return err
@@ -300,6 +301,7 @@ func migrateDB() error {
 	if err := EnsureDefaultCodexPoolChannel(); err != nil {
 		return err
 	}
+	ResetCodexAccountActiveRequests()
 	EnsureDefaultVendors()
 	if common.UsingSQLite {
 		if err := ensureSubscriptionPlanTableSQLite(); err != nil {
@@ -359,6 +361,7 @@ func migrateDBFast() error {
 		{&CodexAccountModelState{}, "CodexAccountModelState"},
 		{&CodexMarketProduct{}, "CodexMarketProduct"},
 		{&CodexMarketCode{}, "CodexMarketCode"},
+		{&CodexMarketPayment{}, "CodexMarketPayment"},
 	}
 	// 动态计算migration数量，确保errChan缓冲区足够大
 	errChan := make(chan error, len(migrations))
@@ -395,6 +398,7 @@ func migrateDBFast() error {
 	if err := EnsureDefaultCodexPoolChannel(); err != nil {
 		return err
 	}
+	ResetCodexAccountActiveRequests()
 	migrateSubscriptionRollingLimits()
 	common.SysLog("database migrated")
 	return nil

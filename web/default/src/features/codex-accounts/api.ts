@@ -11,6 +11,8 @@ export type CodexAccount = {
   base_url: string
   proxy: string
   priority: number
+  max_concurrency: number
+  active_requests: number
   note: string
   status: number
   last_refresh: number
@@ -63,6 +65,7 @@ export type CodexProxyKey = {
   used_quota: number
   unlimited_quota: boolean
   expired_time: number
+  rpm_limit: number
   created_time: number
   accessed_time: number
   codex_subagent_only: boolean
@@ -157,6 +160,7 @@ export async function updateCodexAccount(
   id: number,
   payload: Partial<
     Pick<CodexAccount, 'name' | 'base_url' | 'proxy' | 'priority' | 'note' | 'status'>
+    & Pick<CodexAccount, 'max_concurrency'>
   >
 ) {
   const res = await api.put(`/api/codex_account/${id}`, payload)
@@ -211,6 +215,7 @@ export async function createCodexProxyKey(payload: {
   unlimited_quota: boolean
   expired_time: number
   owner_user_id?: number
+  rpm_limit?: number
 }) {
   const res = await api.post('/api/codex_account/proxy_keys', payload)
   return res.data as {
@@ -222,7 +227,7 @@ export async function createCodexProxyKey(payload: {
 
 export async function updateCodexProxyKey(
   id: number,
-  payload: Partial<Pick<CodexProxyKey, 'name' | 'remain_quota' | 'unlimited_quota' | 'expired_time' | 'status'>>
+  payload: Partial<Pick<CodexProxyKey, 'name' | 'remain_quota' | 'unlimited_quota' | 'expired_time' | 'status' | 'rpm_limit'>>
 ) {
   const res = await api.put(`/api/codex_account/proxy_keys/${id}`, payload)
   return res.data as { success: boolean; message?: string }

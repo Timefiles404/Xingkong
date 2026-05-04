@@ -126,6 +126,7 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 		if accountID := c.GetInt("codex_account_id"); accountID > 0 && shouldCooldownCodexAccountForLocalError(err) {
 			model.MarkCodexAccountModelRelayResult(accountID, codexRequestedModel(c, info), false, err.Error(), 30, false)
 		}
+		releaseSelectedCodexAccount(c)
 		return resp, err
 	}
 	if resp != nil {
@@ -141,26 +142,24 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 }
 
 func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
+	defer releaseSelectedCodexAccount(c)
 	if info.RelayMode != relayconstant.RelayModeResponses && info.RelayMode != relayconstant.RelayModeResponsesCompact {
 		return nil, types.NewError(errors.New("codex channel: endpoint not supported"), types.ErrorCodeInvalidRequest)
 	}
-	if accountID := c.GetInt("codex_account_id"); accountID > 0 && resp != nil {
-		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			model.MarkCodexAccountRelayResult(accountID, true, "", 0)
-			model.MarkCodexAccountModelRelayResult(accountID, codexRequestedModel(c, info), true, "", 0, false)
-		} else if cooldown, accountWide := codexCooldownFromResponse(resp); cooldown > 0 {
-			model.MarkCodexAccountModelRelayResult(accountID, codexRequestedModel(c, info), false, resp.Status, cooldown, accountWide)
-		}
-	}
-
 	if info.RelayMode == relayconstant.RelayModeResponsesCompact {
-		return openai.OaiResponsesCompactionHandler(c, resp)
+		usage, err = openai.OaiResponsesCompactionHandler(c, resp)
+		markCodexAccountAfterResponse(c, info, resp, err)
+		return usage, err
 	}
 
 	if info.IsStream {
-		return openai.OaiResponsesStreamHandler(c, info, resp)
+		usage, err = openai.OaiResponsesStreamHandler(c, info, resp)
+		markCodexAccountAfterResponse(c, info, resp, err)
+		return usage, err
 	}
-	return openai.OaiResponsesHandler(c, info, resp)
+	usage, err = openai.OaiResponsesHandler(c, info, resp)
+	markCodexAccountAfterResponse(c, info, resp, err)
+	return usage, err
 }
 
 func (a *Adaptor) GetModelList() []string {
@@ -264,6 +263,50 @@ func ensureSelectedCodexAccount(c *gin.Context, info *relaycommon.RelayInfo) (*m
 		c.Set("codex_selected_account", account)
 	}
 	return account, nil
+}
+
+func releaseSelectedCodexAccount(c *gin.Context) {
+	if c == nil {
+		return
+	}
+	if released, ok := c.Get("codex_account_released"); ok {
+		if done, _ := released.(bool); done {
+			return
+		}
+	}
+	accountID := c.GetInt("codex_account_id")
+	if accountID <= 0 {
+		return
+	}
+	model.ReleaseCodexAccountRequest(accountID)
+	c.Set("codex_account_released", true)
+}
+
+func markCodexAccountAfterResponse(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response, apiErr *types.NewAPIError) {
+	if c == nil {
+		return
+	}
+	accountID := c.GetInt("codex_account_id")
+	if accountID <= 0 {
+		return
+	}
+	if apiErr != nil {
+		if shouldCooldownCodexAccountForLocalError(apiErr) {
+			model.MarkCodexAccountModelRelayResult(accountID, codexRequestedModel(c, info), false, apiErr.Error(), 30, false)
+		}
+		return
+	}
+	if resp == nil {
+		return
+	}
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		model.MarkCodexAccountRelayResult(accountID, true, "", 0)
+		model.MarkCodexAccountModelRelayResult(accountID, codexRequestedModel(c, info), true, "", 0, false)
+		return
+	}
+	if cooldown, accountWide := codexCooldownFromResponse(resp); cooldown > 0 {
+		model.MarkCodexAccountModelRelayResult(accountID, codexRequestedModel(c, info), false, resp.Status, cooldown, accountWide)
+	}
 }
 
 func codexRequestedModel(c *gin.Context, info *relaycommon.RelayInfo) string {

@@ -20,26 +20,28 @@ const (
 )
 
 type CodexAccount struct {
-	Id            int    `json:"id"`
-	OwnerUserID   int    `json:"owner_user_id" gorm:"default:0;index"`
-	Name          string `json:"name" gorm:"type:varchar(128);default:''"`
-	Email         string `json:"email" gorm:"type:varchar(255);index"`
-	AccountID     string `json:"account_id" gorm:"type:varchar(128);uniqueIndex"`
-	Credential    string `json:"-" gorm:"type:text;not null"`
-	BaseURL       string `json:"base_url" gorm:"type:varchar(512);default:'https://chatgpt.com'"`
-	Proxy         string `json:"proxy" gorm:"type:varchar(512);default:''"`
-	Priority      int    `json:"priority" gorm:"default:0;index"`
-	Note          string `json:"note" gorm:"type:text"`
-	Status        int    `json:"status" gorm:"default:1"`
-	LastRefresh   int64  `json:"last_refresh" gorm:"bigint;default:0"`
-	ExpiredAt     int64  `json:"expired_at" gorm:"bigint;default:0"`
-	LastUsedTime  int64  `json:"last_used_time" gorm:"bigint;default:0"`
-	NextRetryTime int64  `json:"next_retry_time" gorm:"bigint;default:0"`
-	UsedCount     int64  `json:"used_count" gorm:"bigint;default:0"`
-	FailedCount   int64  `json:"failed_count" gorm:"bigint;default:0"`
-	LastError     string `json:"last_error" gorm:"type:text"`
-	CreatedAt     int64  `json:"created_at" gorm:"bigint"`
-	UpdatedAt     int64  `json:"updated_at" gorm:"bigint"`
+	Id             int    `json:"id"`
+	OwnerUserID    int    `json:"owner_user_id" gorm:"default:0;index"`
+	Name           string `json:"name" gorm:"type:varchar(128);default:''"`
+	Email          string `json:"email" gorm:"type:varchar(255);index"`
+	AccountID      string `json:"account_id" gorm:"type:varchar(128);uniqueIndex"`
+	Credential     string `json:"-" gorm:"type:text;not null"`
+	BaseURL        string `json:"base_url" gorm:"type:varchar(512);default:'https://chatgpt.com'"`
+	Proxy          string `json:"proxy" gorm:"type:varchar(512);default:''"`
+	Priority       int    `json:"priority" gorm:"default:0;index"`
+	MaxConcurrency int    `json:"max_concurrency" gorm:"default:1"`
+	ActiveRequests int    `json:"active_requests" gorm:"default:0;index"`
+	Note           string `json:"note" gorm:"type:text"`
+	Status         int    `json:"status" gorm:"default:1"`
+	LastRefresh    int64  `json:"last_refresh" gorm:"bigint;default:0"`
+	ExpiredAt      int64  `json:"expired_at" gorm:"bigint;default:0"`
+	LastUsedTime   int64  `json:"last_used_time" gorm:"bigint;default:0"`
+	NextRetryTime  int64  `json:"next_retry_time" gorm:"bigint;default:0"`
+	UsedCount      int64  `json:"used_count" gorm:"bigint;default:0"`
+	FailedCount    int64  `json:"failed_count" gorm:"bigint;default:0"`
+	LastError      string `json:"last_error" gorm:"type:text"`
+	CreatedAt      int64  `json:"created_at" gorm:"bigint"`
+	UpdatedAt      int64  `json:"updated_at" gorm:"bigint"`
 }
 
 type CodexSubagent struct {
@@ -120,6 +122,9 @@ func (a *CodexAccount) BeforeCreate(tx *gorm.DB) error {
 	}
 	if a.Status == 0 {
 		a.Status = CodexAccountStatusEnabled
+	}
+	if a.MaxConcurrency <= 0 {
+		a.MaxConcurrency = 1
 	}
 	return nil
 }
@@ -218,6 +223,10 @@ func GetCodexPoolChannel() (*Channel, error) {
 		return nil, err
 	}
 	return &channel, nil
+}
+
+func ResetCodexAccountActiveRequests() {
+	_ = DB.Model(&CodexAccount{}).Where("active_requests <> 0").Update("active_requests", 0).Error
 }
 
 func EnsureDefaultCodexPoolChannel() error {
@@ -393,19 +402,20 @@ func UpsertCodexAccountFromOAuthKeyForOwner(key CodexOAuthCredential, name strin
 	}
 
 	account := CodexAccount{
-		OwnerUserID: ownerUserID,
-		Name:        strings.TrimSpace(name),
-		Email:       strings.TrimSpace(key.Email),
-		AccountID:   accountID,
-		Credential:  string(encoded),
-		BaseURL:     strings.TrimSpace(baseURL),
-		Proxy:       strings.TrimSpace(proxy),
-		Priority:    key.Priority,
-		Note:        strings.TrimSpace(key.Note),
-		Status:      status,
-		LastRefresh: lastRefresh,
-		ExpiredAt:   expiredAt,
-		LastError:   "",
+		OwnerUserID:    ownerUserID,
+		Name:           strings.TrimSpace(name),
+		Email:          strings.TrimSpace(key.Email),
+		AccountID:      accountID,
+		Credential:     string(encoded),
+		BaseURL:        strings.TrimSpace(baseURL),
+		Proxy:          strings.TrimSpace(proxy),
+		Priority:       key.Priority,
+		MaxConcurrency: 1,
+		Note:           strings.TrimSpace(key.Note),
+		Status:         status,
+		LastRefresh:    lastRefresh,
+		ExpiredAt:      expiredAt,
+		LastError:      "",
 	}
 	err = DB.Transaction(func(tx *gorm.DB) error {
 		var existing CodexAccount
@@ -415,18 +425,19 @@ func UpsertCodexAccountFromOAuthKeyForOwner(key CodexOAuthCredential, name strin
 				return fmt.Errorf("codex account already belongs to owner_user_id=%d", existing.OwnerUserID)
 			}
 			return tx.Model(&CodexAccount{}).Where("id = ?", existing.Id).Updates(map[string]any{
-				"name":         account.Name,
-				"email":        account.Email,
-				"credential":   account.Credential,
-				"base_url":     account.BaseURL,
-				"proxy":        account.Proxy,
-				"priority":     account.Priority,
-				"note":         account.Note,
-				"status":       account.Status,
-				"last_refresh": account.LastRefresh,
-				"expired_at":   account.ExpiredAt,
-				"last_error":   "",
-				"updated_at":   common.GetTimestamp(),
+				"name":            account.Name,
+				"email":           account.Email,
+				"credential":      account.Credential,
+				"base_url":        account.BaseURL,
+				"proxy":           account.Proxy,
+				"priority":        account.Priority,
+				"max_concurrency": gorm.Expr("CASE WHEN max_concurrency <= 0 THEN 1 ELSE max_concurrency END"),
+				"note":            account.Note,
+				"status":          account.Status,
+				"last_refresh":    account.LastRefresh,
+				"expired_at":      account.ExpiredAt,
+				"last_error":      "",
+				"updated_at":      common.GetTimestamp(),
 			}).Error
 		}
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -474,9 +485,20 @@ func touchSelectedCodexAccount(tx *gorm.DB, account *CodexAccount, now int64) er
 		return nil
 	}
 	return tx.Model(&CodexAccount{}).Where("id = ?", account.Id).Updates(map[string]any{
-		"last_used_time": now,
-		"used_count":     gorm.Expr("used_count + ?", 1),
-		"updated_at":     now,
+		"last_used_time":  now,
+		"used_count":      gorm.Expr("used_count + ?", 1),
+		"active_requests": gorm.Expr("active_requests + ?", 1),
+		"updated_at":      now,
+	}).Error
+}
+
+func ReleaseCodexAccountRequest(accountID int) {
+	if accountID <= 0 {
+		return
+	}
+	_ = DB.Model(&CodexAccount{}).Where("id = ?", accountID).Updates(map[string]any{
+		"active_requests": gorm.Expr("CASE WHEN active_requests > 0 THEN active_requests - 1 ELSE 0 END"),
+		"updated_at":      common.GetTimestamp(),
 	}).Error
 }
 
@@ -511,6 +533,7 @@ func selectAvailableCodexAccountForModel(tx *gorm.DB, now int64, modelName strin
 	var account CodexAccount
 	q := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 		Where("owner_user_id = ? AND status = ? AND (next_retry_time = 0 OR next_retry_time <= ?)", ownerUserID, CodexAccountStatusEnabled, now).
+		Where("active_requests < CASE WHEN max_concurrency <= 0 THEN 1 ELSE max_concurrency END").
 		Order("priority desc, last_used_time asc, id asc")
 	modelName = truncateCodexAffinityPart(modelName, 128)
 	if modelName != "" {
@@ -542,6 +565,7 @@ func SelectCodexAccountForRelayWithOwner(sessionKey string, modelName string, ow
 				var account CodexAccount
 				q := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 					Where("id = ? AND owner_user_id = ? AND status = ? AND (next_retry_time = 0 OR next_retry_time <= ?)", affinity.AccountRowID, ownerUserID, CodexAccountStatusEnabled, now).
+					Where("active_requests < CASE WHEN max_concurrency <= 0 THEN 1 ELSE max_concurrency END").
 					Limit(1)
 				modelKey := truncateCodexAffinityPart(modelName, 128)
 				if modelKey != "" {

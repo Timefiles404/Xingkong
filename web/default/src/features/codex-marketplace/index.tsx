@@ -5,17 +5,29 @@ import { SectionPageLayout } from '@/components/layout'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Progress } from '@/components/ui/progress'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Textarea } from '@/components/ui/textarea'
 import {
   getCodexMarketProducts,
+  getMyCodexMarketPaymentKeySecret,
+  getMyCodexMarketPayments,
   getMyCodexMarketKeySecret,
   getMyCodexMarketKeys,
   quotaToUsd,
   redeemCodexMarketCode,
+  submitCodexMarketPayment,
   type CodexMarketKey,
+  type CodexMarketPayment,
   type CodexMarketProduct,
 } from './api'
 
@@ -37,9 +49,14 @@ function keyUsagePercent(item: CodexMarketKey) {
 export function CodexMarketplace() {
   const [products, setProducts] = useState<CodexMarketProduct[]>([])
   const [keys, setKeys] = useState<CodexMarketKey[]>([])
+  const [payments, setPayments] = useState<CodexMarketPayment[]>([])
   const [redeemCode, setRedeemCode] = useState('')
   const [loading, setLoading] = useState(false)
   const [redeeming, setRedeeming] = useState(false)
+  const [paymentProduct, setPaymentProduct] = useState<CodexMarketProduct | null>(null)
+  const [paymentContact, setPaymentContact] = useState('')
+  const [paymentProof, setPaymentProof] = useState('')
+  const [paymentMessage, setPaymentMessage] = useState('')
 
   const activeProducts = useMemo(
     () => products.filter((item) => item.status === 1),
@@ -49,12 +66,14 @@ export function CodexMarketplace() {
   const load = async () => {
     setLoading(true)
     try {
-      const [productRes, keyRes] = await Promise.all([
+      const [productRes, keyRes, paymentRes] = await Promise.all([
         getCodexMarketProducts(),
         getMyCodexMarketKeys(),
+        getMyCodexMarketPayments(),
       ])
       if (productRes.success) setProducts(productRes.data || [])
       if (keyRes.success) setKeys(keyRes.data || [])
+      if (paymentRes.success) setPayments(paymentRes.data || [])
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '加载失败')
     } finally {
@@ -101,6 +120,36 @@ export function CodexMarketplace() {
     }
     await navigator.clipboard.writeText(res.data.key)
     toast.success('Key 已复制')
+  }
+
+  const copyPaymentKey = async (id: number) => {
+    const res = await getMyCodexMarketPaymentKeySecret(id)
+    if (!res.success || !res.data?.key) {
+      toast.error(res.message || '获取 key 失败')
+      return
+    }
+    await navigator.clipboard.writeText(res.data.key)
+    toast.success('Key 已复制')
+  }
+
+  const submitPayment = async () => {
+    if (!paymentProduct) return
+    const res = await submitCodexMarketPayment({
+      product_id: paymentProduct.id,
+      contact: paymentContact,
+      proof: paymentProof,
+      message: paymentMessage,
+    })
+    if (!res.success) {
+      toast.error(res.message || '提交失败')
+      return
+    }
+    toast.success('支付确认已提交，等待卖家审核')
+    setPaymentProduct(null)
+    setPaymentContact('')
+    setPaymentProof('')
+    setPaymentMessage('')
+    await load()
   }
 
   return (
@@ -154,6 +203,7 @@ export function CodexMarketplace() {
                         <CardTitle className='text-base'>{product.title}</CardTitle>
                         <div className='text-muted-foreground mt-1 text-xs'>
                           {sellerName(product)} · ${quotaToUsd(product.quota)}
+                          {product.key_rpm ? ` · RPM ${product.key_rpm}` : ''}
                         </div>
                       </div>
                       <Badge variant='secondary'>{product.available_codes || 0} 个码</Badge>
@@ -173,7 +223,7 @@ export function CodexMarketplace() {
                     <div className='rounded-lg bg-muted/50 p-3 text-sm'>
                       <div className='font-medium'>外部支付 / 联系方式</div>
                       <div className='text-muted-foreground mt-1 whitespace-pre-wrap break-words text-xs'>
-                        {product.payment_text || '卖家暂未填写，请通过其他渠道联系卖家获取兑换码。'}
+                      {product.payment_text || '卖家暂未填写，请通过其他渠道联系卖家获取兑换码。'}
                       </div>
                       {product.payment_url && (
                         <Button variant='link' className='h-auto px-0 pt-2 text-xs' asChild>
@@ -184,6 +234,9 @@ export function CodexMarketplace() {
                         </Button>
                       )}
                     </div>
+                    <Button variant='outline' size='sm' onClick={() => setPaymentProduct(product)}>
+                      提交支付确认
+                    </Button>
                   </CardContent>
                 </Card>
               ))}
@@ -195,7 +248,7 @@ export function CodexMarketplace() {
             </div>
           </TabsContent>
 
-          <TabsContent value='keys'>
+          <TabsContent value='keys' className='space-y-4'>
             <div className='grid gap-4 lg:grid-cols-2'>
               {keys.map((item) => {
                 const percent = keyUsagePercent(item)
@@ -227,7 +280,7 @@ export function CodexMarketplace() {
                         <div className='text-muted-foreground text-xs'>剩余 ${quotaToUsd(item.remain_quota)}</div>
                       </div>
                       <div className='text-muted-foreground text-xs'>
-                        模型：{item.model_limits || '-'} · 兑换时间：{formatTime(item.redeemed_at)}
+                        模型：{item.model_limits || '-'} · RPM {item.rpm_limit || '不限'} · 兑换时间：{formatTime(item.redeemed_at)}
                       </div>
                       <div className='flex justify-end'>
                         <Button variant='outline' size='sm' onClick={() => copyKey(item.id)}>
@@ -245,8 +298,72 @@ export function CodexMarketplace() {
                 </div>
               )}
             </div>
+            <Card>
+              <CardHeader>
+                <CardTitle className='text-base'>我的支付确认</CardTitle>
+              </CardHeader>
+              <CardContent className='grid gap-3 lg:grid-cols-2'>
+                {payments.map((payment) => (
+                  <div key={payment.id} className='rounded-xl border p-4 text-sm'>
+                    <div className='flex items-start justify-between gap-3'>
+                      <div>
+                        <div className='font-medium'>{payment.product_title || `商品 #${payment.product_id}`}</div>
+                        <div className='text-muted-foreground mt-1 text-xs'>
+                          ${quotaToUsd(payment.quota)} · RPM {payment.key_rpm || '不限'} · {formatTime(payment.created_at)}
+                        </div>
+                      </div>
+                      <Badge variant={payment.status === 1 ? 'secondary' : payment.status === 2 ? 'default' : 'destructive'}>
+                        {payment.status === 1 ? '待确认' : payment.status === 2 ? '已通过' : '已拒绝'}
+                      </Badge>
+                    </div>
+                    {payment.message && (
+                      <div className='text-muted-foreground mt-2 whitespace-pre-wrap break-words text-xs'>{payment.message}</div>
+                    )}
+                    {payment.status === 2 && payment.token_id > 0 && (
+                      <div className='mt-3 flex justify-end'>
+                        <Button variant='outline' size='sm' onClick={() => copyPaymentKey(payment.id)}>
+                          <Copy className='mr-2 h-4 w-4' />
+                          复制 Key
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+                {payments.length === 0 && (
+                  <div className='text-muted-foreground rounded-xl border border-dashed p-8 text-center text-sm lg:col-span-2'>
+                    暂无支付确认记录。
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           </TabsContent>
         </Tabs>
+
+        <Dialog open={!!paymentProduct} onOpenChange={(open) => !open && setPaymentProduct(null)}>
+          <DialogContent className='sm:max-w-xl'>
+            <DialogHeader>
+              <DialogTitle>提交支付确认</DialogTitle>
+            </DialogHeader>
+            <div className='space-y-3'>
+              <div className='rounded-lg bg-muted/50 p-3 text-sm'>
+                <div className='font-medium'>{paymentProduct?.title}</div>
+                <div className='text-muted-foreground mt-1 whitespace-pre-wrap break-words text-xs'>
+                  {paymentProduct?.payment_confirm_text || '提交联系方式或支付凭证后，卖家确认会为你发放市场 Key。'}
+                </div>
+              </div>
+              <Label>联系方式</Label>
+              <Input value={paymentContact} onChange={(e) => setPaymentContact(e.target.value)} placeholder='QQ / 邮箱 / 订单号等' />
+              <Label>支付凭证</Label>
+              <Textarea value={paymentProof} onChange={(e) => setPaymentProof(e.target.value)} placeholder='支付截图链接、交易号或其他凭证' />
+              <Label>补充说明</Label>
+              <Textarea value={paymentMessage} onChange={(e) => setPaymentMessage(e.target.value)} />
+            </div>
+            <DialogFooter>
+              <Button variant='outline' onClick={() => setPaymentProduct(null)}>取消</Button>
+              <Button onClick={submitPayment}>提交</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </SectionPageLayout.Content>
     </SectionPageLayout>
   )

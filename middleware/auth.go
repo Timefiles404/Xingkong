@@ -1,12 +1,14 @@
 package middleware
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -404,8 +406,54 @@ func TokenAuth() func(c *gin.Context) {
 		if err != nil {
 			return
 		}
+		if !enforceTokenRPMLimit(c, token) {
+			return
+		}
 		c.Next()
 	}
+}
+
+func enforceTokenRPMLimit(c *gin.Context, token *model.Token) bool {
+	if token == nil || token.RPMLimit <= 0 {
+		return true
+	}
+	key := fmt.Sprintf("token_rpm:%d", token.Id)
+	allowed := true
+	if common.RedisEnabled {
+		ctx := context.Background()
+		rdb := common.RDB
+		listLength, err := rdb.LLen(ctx, key).Result()
+		if err != nil {
+			abortWithOpenAiMessage(c, http.StatusInternalServerError, "令牌 RPM 限流检查失败")
+			return false
+		}
+		if listLength < int64(token.RPMLimit) {
+			rdb.LPush(ctx, key, time.Now().Format(timeFormat))
+			rdb.Expire(ctx, key, time.Minute)
+		} else {
+			oldTimeStr, _ := rdb.LIndex(ctx, key, -1).Result()
+			oldTime, err := time.Parse(timeFormat, oldTimeStr)
+			if err != nil {
+				abortWithOpenAiMessage(c, http.StatusInternalServerError, "令牌 RPM 限流数据异常")
+				return false
+			}
+			if time.Since(oldTime) < time.Minute {
+				allowed = false
+			} else {
+				rdb.LPush(ctx, key, time.Now().Format(timeFormat))
+				rdb.LTrim(ctx, key, 0, int64(token.RPMLimit-1))
+				rdb.Expire(ctx, key, time.Minute)
+			}
+		}
+	} else {
+		inMemoryRateLimiter.Init(time.Minute)
+		allowed = inMemoryRateLimiter.Request(key, token.RPMLimit, 60)
+	}
+	if !allowed {
+		abortWithOpenAiMessage(c, http.StatusTooManyRequests, fmt.Sprintf("令牌已达到 RPM 限制：每分钟最多 %d 次请求", token.RPMLimit))
+		return false
+	}
+	return true
 }
 
 func SetupContextForToken(c *gin.Context, token *model.Token, parts ...string) error {
