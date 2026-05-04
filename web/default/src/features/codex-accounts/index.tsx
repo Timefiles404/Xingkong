@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { SectionPageLayout } from '@/components/layout'
+import { CodexMarketplaceSellerPanel } from '@/features/codex-marketplace/seller-panel'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -764,6 +765,7 @@ export function CodexAccounts() {
           <TabsList>
             <TabsTrigger value='accounts'>账号池</TabsTrigger>
             <TabsTrigger value='keys'>分发密钥</TabsTrigger>
+            <TabsTrigger value='market'>市场商品</TabsTrigger>
             {isAdmin && <TabsTrigger value='subagents'>子代理</TabsTrigger>}
           </TabsList>
           <TabsContent value='accounts'>
@@ -1043,6 +1045,9 @@ export function CodexAccounts() {
                 </CardContent>
               </Card>
             </div>
+          </TabsContent>
+          <TabsContent value='market'>
+            <CodexMarketplaceSellerPanel sellerId={ownerForRequest} />
           </TabsContent>
           {isAdmin && (
             <TabsContent value='subagents'>

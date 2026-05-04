@@ -15,6 +15,7 @@ import {
   ChartColumnIncreasing,
   Settings,
   Bot,
+  ShoppingBag,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { WORKSPACE_IDS } from '@/components/layout/lib/workspace-registry'
@@ -56,6 +57,11 @@ export function useSidebarData(): SidebarData {
             title: t('Codex 账号托管'),
             url: '/codex-accounts',
             icon: Bot,
+          },
+          {
+            title: t('Codex 跳蚤市场'),
+            url: '/codex-marketplace',
+            icon: ShoppingBag,
           },
         ],
       },

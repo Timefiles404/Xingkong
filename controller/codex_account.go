@@ -593,6 +593,10 @@ func UpdateCodexProxyKey(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	if isCodexMarketplaceToken(token.Id) {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "市场兑换 Key 不能在分发密钥里修改"})
+		return
+	}
 	req := codexProxyKeyRequest{}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		common.ApiError(c, err)
@@ -643,6 +647,10 @@ func DeleteCodexProxyKey(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	if isCodexMarketplaceToken(token.Id) {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "市场兑换 Key 不能由卖家删除"})
+		return
+	}
 	if err := token.Delete(); err != nil {
 		common.ApiError(c, err)
 		return
@@ -670,7 +678,20 @@ func GetCodexProxyKeySecret(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	if isCodexMarketplaceToken(token.Id) {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "卖家不能查看市场兑换 Key 的完整内容"})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"key": "sk-" + token.Key}})
+}
+
+func isCodexMarketplaceToken(tokenID int) bool {
+	if tokenID <= 0 {
+		return false
+	}
+	var count int64
+	_ = model.DB.Model(&model.CodexMarketCode{}).Where("token_id = ?", tokenID).Count(&count).Error
+	return count > 0
 }
 
 func GetCodexProxyStats(c *gin.Context) {

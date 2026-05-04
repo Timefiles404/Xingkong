@@ -288,6 +288,20 @@ func SetApiRouter(router *gin.Engine) {
 			codexAccountRoute.POST("/:id/refresh", controller.RefreshCodexAccount)
 			codexAccountRoute.GET("/:id/usage", controller.GetCodexAccountUsage)
 		}
+		codexMarketRoute := apiRouter.Group("/codex_market")
+		codexMarketRoute.Use(middleware.UserAuth())
+		{
+			codexMarketRoute.GET("/products", controller.ListCodexMarketProducts)
+			codexMarketRoute.POST("/redeem", controller.RedeemCodexMarketCode)
+			codexMarketRoute.GET("/my_keys", controller.ListMyCodexMarketKeys)
+			codexMarketRoute.POST("/my_keys/:id/key", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.GetMyCodexMarketKeySecret)
+			codexMarketRoute.GET("/seller/products", controller.ListMyCodexMarketProducts)
+			codexMarketRoute.POST("/seller/products", controller.CreateCodexMarketProduct)
+			codexMarketRoute.PUT("/seller/products/:id", controller.UpdateCodexMarketProduct)
+			codexMarketRoute.DELETE("/seller/products/:id", controller.DeleteCodexMarketProduct)
+			codexMarketRoute.GET("/seller/codes", controller.ListCodexMarketCodes)
+			codexMarketRoute.POST("/seller/codes", controller.GenerateCodexMarketCodes)
+		}
 		channelLabRoute := apiRouter.Group("/channel_lab")
 		channelLabRoute.Use(middleware.AdminAuth())
 		{

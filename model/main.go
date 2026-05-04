@@ -291,6 +291,8 @@ func migrateDB() error {
 		&CodexSubagent{},
 		&CodexAccountAffinity{},
 		&CodexAccountModelState{},
+		&CodexMarketProduct{},
+		&CodexMarketCode{},
 	)
 	if err != nil {
 		return err
@@ -353,6 +355,10 @@ func migrateDBFast() error {
 		{&UserOAuthBinding{}, "UserOAuthBinding"},
 		{&CodexAccount{}, "CodexAccount"},
 		{&CodexSubagent{}, "CodexSubagent"},
+		{&CodexAccountAffinity{}, "CodexAccountAffinity"},
+		{&CodexAccountModelState{}, "CodexAccountModelState"},
+		{&CodexMarketProduct{}, "CodexMarketProduct"},
+		{&CodexMarketCode{}, "CodexMarketCode"},
 	}
 	// 动态计算migration数量，确保errChan缓冲区足够大
 	errChan := make(chan error, len(migrations))

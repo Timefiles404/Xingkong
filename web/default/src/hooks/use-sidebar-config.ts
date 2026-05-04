@@ -23,6 +23,7 @@ const DEFAULT_SIDEBAR_MODULES: SidebarModulesAdminConfig = {
     playground: true,
     token: true,
     codex: true,
+    codex_marketplace: true,
   },
   data: {
     enabled: true,
@@ -54,6 +55,7 @@ const URL_TO_CONFIG_MAP: Record<string, { section: string; module: string }> = {
   '/playground/images': { section: 'usage', module: 'playground' },
   '/keys': { section: 'usage', module: 'token' },
   '/codex-accounts': { section: 'usage', module: 'codex' },
+  '/codex-marketplace': { section: 'usage', module: 'codex_marketplace' },
   '/dashboard': { section: 'data', module: 'detail' },
   '/dashboard/overview': { section: 'data', module: 'detail' },
   '/dashboard/models': { section: 'data', module: 'detail' },
