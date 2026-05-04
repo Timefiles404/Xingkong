@@ -102,6 +102,7 @@ export function CodexAccounts() {
   const [selectedOwner, setSelectedOwner] = useState(-1)
   const [loading, setLoading] = useState(false)
   const [busyId, setBusyId] = useState<number | null>(null)
+  const [savingAccount, setSavingAccount] = useState(false)
   const [oauthOpen, setOAuthOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
@@ -140,6 +141,11 @@ export function CodexAccounts() {
     () => accounts.filter((item) => item.status === 1).length,
     [accounts]
   )
+
+  const getErrorMessage = (error: unknown, fallback: string) => {
+    if (error instanceof Error && error.message) return error.message
+    return fallback
+  }
 
   const loadAccess = async () => {
     const res = await getCodexAccountAccess()
@@ -346,20 +352,28 @@ export function CodexAccounts() {
   const saveAccount = async () => {
     if (!editingAccount) return
     const priority = Number.parseInt(editPriority, 10)
-    const res = await updateCodexAccount(editingAccount.id, {
-      name: editName,
-      base_url: editBaseUrl,
-      proxy: editProxy,
-      priority: Number.isFinite(priority) ? priority : 0,
-      note: editNote,
-    })
-    if (!res.success) {
-      toast.error(res.message || '保存失败')
-      return
+    setSavingAccount(true)
+    try {
+      const res = await updateCodexAccount(editingAccount.id, {
+        name: editName,
+        base_url: editBaseUrl,
+        proxy: editProxy,
+        priority: Number.isFinite(priority) ? priority : 0,
+        note: editNote,
+      })
+      if (!res.success) {
+        toast.error(res.message || '保存失败')
+        return
+      }
+      toast.success('账号设置已保存')
+      setEditOpen(false)
+      setEditingAccount(null)
+      await load()
+    } catch (error) {
+      toast.error(getErrorMessage(error, '保存失败'))
+    } finally {
+      setSavingAccount(false)
     }
-    setEditOpen(false)
-    setEditingAccount(null)
-    await load()
   }
 
   const handleUsage = async (id: number) => {
@@ -368,6 +382,72 @@ export function CodexAccounts() {
       const res = await getCodexAccountUsage(id)
       setUsageContent(JSON.stringify(res, null, 2))
       setUsageOpen(true)
+      if (!res.success) {
+        toast.error(res.message || `获取用量失败，上游状态：${res.upstream_status || '未知'}`)
+      }
+    } catch (error) {
+      setUsageContent(
+        JSON.stringify({ success: false, message: getErrorMessage(error, '获取用量失败') }, null, 2)
+      )
+      setUsageOpen(true)
+      toast.error(getErrorMessage(error, '获取用量失败'))
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const handleRefreshAccount = async (account: CodexAccount) => {
+    if (!account.has_refresh_token) {
+      toast.error('该账号没有 refresh_token，请使用“重授权”更新账号')
+      return
+    }
+    setBusyId(account.id)
+    try {
+      const res = await refreshCodexAccount(account.id)
+      if (!res.success) {
+        toast.error(res.message || '刷新失败')
+        return
+      }
+      toast.success('账号凭据已刷新')
+      await load()
+    } catch (error) {
+      toast.error(getErrorMessage(error, '刷新失败'))
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const handleToggleAccountStatus = async (account: CodexAccount) => {
+    setBusyId(account.id)
+    try {
+      const nextStatus = account.status === 1 ? 2 : 1
+      const res = await updateCodexAccount(account.id, { status: nextStatus })
+      if (!res.success) {
+        toast.error(res.message || '状态更新失败')
+        return
+      }
+      toast.success(nextStatus === 1 ? '账号已启用' : '账号已停用')
+      await load()
+    } catch (error) {
+      toast.error(getErrorMessage(error, '状态更新失败'))
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const handleDeleteAccount = async (account: CodexAccount) => {
+    if (!window.confirm('确认删除该 Codex 账号？')) return
+    setBusyId(account.id)
+    try {
+      const res = await deleteCodexAccount(account.id)
+      if (!res.success) {
+        toast.error(res.message || '删除失败')
+        return
+      }
+      toast.success('账号已删除')
+      await load()
+    } catch (error) {
+      toast.error(getErrorMessage(error, '删除失败'))
     } finally {
       setBusyId(null)
     }
@@ -614,16 +694,16 @@ export function CodexAccounts() {
                               disabled={busyId === account.id}
                               onClick={() => handleUsage(account.id)}
                             >
+                              {busyId === account.id ? (
+                                <Loader2 className='mr-1 h-3.5 w-3.5 animate-spin' />
+                              ) : null}
                               用量
                             </Button>
                             <Button
                               variant='ghost'
                               size='sm'
-                              disabled={busyId === account.id || !account.has_refresh_token}
-                              onClick={async () => {
-                                await refreshCodexAccount(account.id)
-                                await load()
-                              }}
+                              disabled={busyId === account.id}
+                              onClick={() => handleRefreshAccount(account)}
                             >
                               刷新
                             </Button>
@@ -637,30 +717,25 @@ export function CodexAccounts() {
                             <Button
                               variant='ghost'
                               size='sm'
-                              onClick={async () => {
-                                await updateCodexAccount(account.id, {
-                                  status: account.status === 1 ? 2 : 1,
-                                })
-                                await load()
-                              }}
+                              disabled={busyId === account.id}
+                              onClick={() => handleToggleAccountStatus(account)}
                             >
                               {account.status === 1 ? '停用' : '启用'}
                             </Button>
                             <Button
                               variant='ghost'
-                              size='icon'
+                              size='sm'
+                              disabled={busyId === account.id}
                               onClick={() => openEditAccount(account)}
                             >
-                              <Pencil className='h-4 w-4' />
+                              <Pencil className='mr-1 h-3.5 w-3.5' />
+                              修改
                             </Button>
                             <Button
                               variant='ghost'
                               size='icon'
-                              onClick={async () => {
-                                if (!window.confirm('确认删除该 Codex 账号？')) return
-                                await deleteCodexAccount(account.id)
-                                await load()
-                              }}
+                              disabled={busyId === account.id}
+                              onClick={() => handleDeleteAccount(account)}
                             >
                               <Trash2 className='h-4 w-4' />
                             </Button>
@@ -922,7 +997,10 @@ export function CodexAccounts() {
             <Button variant='outline' onClick={() => setEditOpen(false)}>
               取消
             </Button>
-            <Button onClick={saveAccount}>保存</Button>
+            <Button onClick={saveAccount} disabled={savingAccount}>
+              {savingAccount ? <Loader2 className='mr-2 h-4 w-4 animate-spin' /> : null}
+              保存
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
