@@ -3,6 +3,7 @@ package codex
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -105,6 +106,9 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	if len(request.Instructions) == 0 {
 		request.Instructions = json.RawMessage(`""`)
 	}
+	if err := normalizeCodexResponsesInput(&request); err != nil {
+		return nil, err
+	}
 
 	if isCompact {
 		return request, nil
@@ -115,6 +119,45 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	request.MaxOutputTokens = nil
 	request.Temperature = nil
 	return request, nil
+}
+
+func normalizeCodexResponsesInput(request *dto.OpenAIResponsesRequest) error {
+	if request == nil || len(request.Input) == 0 {
+		return nil
+	}
+	switch common.GetJsonType(request.Input) {
+	case "array":
+		return nil
+	case "string":
+		var text string
+		if err := common.Unmarshal(request.Input, &text); err != nil {
+			return err
+		}
+		input, err := common.Marshal([]map[string]any{
+			{
+				"role":    "user",
+				"content": text,
+			},
+		})
+		if err != nil {
+			return err
+		}
+		request.Input = input
+		return nil
+	case "object":
+		var item map[string]any
+		if err := common.Unmarshal(request.Input, &item); err != nil {
+			return err
+		}
+		input, err := common.Marshal([]map[string]any{item})
+		if err != nil {
+			return err
+		}
+		request.Input = input
+		return nil
+	default:
+		return fmt.Errorf("codex channel: input must be a string, object or list")
+	}
 }
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
