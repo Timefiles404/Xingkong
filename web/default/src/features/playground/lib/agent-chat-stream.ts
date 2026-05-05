@@ -27,6 +27,12 @@ export async function chargeExternalRequestFeeOnce(): Promise<void> {
   await chargeExternalAgentRequestFee()
 }
 
+function removeDefaultSamplingParams(payload: Record<string, unknown>) {
+  if (payload.top_p === 1) delete payload.top_p
+  if (payload.frequency_penalty === 0) delete payload.frequency_penalty
+  if (payload.presence_penalty === 0) delete payload.presence_penalty
+}
+
 export function streamAgentCompletion(
   payload: ChatCompletionRequest,
   onVisibleContent: (content: string) => void,
@@ -216,6 +222,7 @@ function streamExternalAgentChatCompletionOnce(
     } as Record<string, unknown>
     delete externalPayload.group
     delete externalPayload.prompt_cache_key
+    removeDefaultSamplingParams(externalPayload)
     const source = new SSE(externalEndpoint(provider.baseUrl, '/chat/completions'), {
       headers: {
         'Content-Type': 'application/json',
