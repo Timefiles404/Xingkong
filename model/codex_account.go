@@ -84,12 +84,14 @@ type CodexAccountPublic struct {
 
 type CodexSubagentPublic struct {
 	CodexSubagent
-	Username     string `json:"username"`
-	DisplayName  string `json:"display_name"`
-	Email        string `json:"email"`
-	AccountCount int64  `json:"account_count"`
-	KeyCount     int64  `json:"key_count"`
-	UsedQuota    int64  `json:"used_quota"`
+	Username           string `json:"username"`
+	DisplayName        string `json:"display_name"`
+	Email              string `json:"email"`
+	AccountCount       int64  `json:"account_count"`
+	KeyCount           int64  `json:"key_count"`
+	UsedQuota          int64  `json:"used_quota"`
+	MarketSoldQuota    int64  `json:"market_sold_quota"`
+	MarketSoldKeyCount int64  `json:"market_sold_key_count"`
 }
 
 type CodexOAuthCredential struct {
@@ -355,6 +357,26 @@ func ListCodexSubagents() ([]CodexSubagentPublic, error) {
 		var usedQuota int64
 		_ = DB.Model(&Token{}).Where("codex_subagent_only = ? AND codex_subagent_owner = ?", true, subagent.UserID).Select("COALESCE(SUM(used_quota),0)").Scan(&usedQuota).Error
 		item.UsedQuota = usedQuota
+		var codeSoldQuota int64
+		var paymentSoldQuota int64
+		var codeSoldCount int64
+		var paymentSoldCount int64
+		_ = DB.Model(&CodexMarketCode{}).
+			Where("seller_id = ? AND status = ? AND token_id > 0", subagent.UserID, CodexMarketCodeRedeemed).
+			Count(&codeSoldCount).Error
+		_ = DB.Model(&CodexMarketCode{}).
+			Where("seller_id = ? AND status = ? AND token_id > 0", subagent.UserID, CodexMarketCodeRedeemed).
+			Select("COALESCE(SUM(quota),0)").
+			Scan(&codeSoldQuota).Error
+		_ = DB.Model(&CodexMarketPayment{}).
+			Where("seller_id = ? AND status = ? AND token_id > 0", subagent.UserID, CodexMarketPaymentApproved).
+			Count(&paymentSoldCount).Error
+		_ = DB.Model(&CodexMarketPayment{}).
+			Where("seller_id = ? AND status = ? AND token_id > 0", subagent.UserID, CodexMarketPaymentApproved).
+			Select("COALESCE(SUM(quota),0)").
+			Scan(&paymentSoldQuota).Error
+		item.MarketSoldQuota = codeSoldQuota + paymentSoldQuota
+		item.MarketSoldKeyCount = codeSoldCount + paymentSoldCount
 		out = append(out, item)
 	}
 	return out, nil

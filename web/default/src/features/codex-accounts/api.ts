@@ -51,6 +51,8 @@ export type CodexSubagent = {
   account_count: number
   key_count: number
   used_quota: number
+  market_sold_quota: number
+  market_sold_key_count: number
   created_at: number
   updated_at: number
 }

@@ -305,6 +305,7 @@ func SetApiRouter(router *gin.Engine) {
 			codexMarketRoute.GET("/seller/codes", controller.ListCodexMarketCodes)
 			codexMarketRoute.POST("/seller/codes", controller.GenerateCodexMarketCodes)
 			codexMarketRoute.GET("/seller/codes/export", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.ExportCodexMarketCodes)
+			codexMarketRoute.POST("/seller/codes/cleanup_invalid", controller.CleanupInvalidCodexMarketCodes)
 			codexMarketRoute.POST("/seller/codes/:id/disable", controller.DisableCodexMarketCode)
 			codexMarketRoute.GET("/seller/payments", controller.ListSellerCodexMarketPayments)
 			codexMarketRoute.POST("/seller/payments/:id/review", controller.ReviewCodexMarketPayment)

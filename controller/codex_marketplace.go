@@ -389,6 +389,32 @@ func DisableCodexMarketCode(c *gin.Context) {
 	common.ApiSuccess(c, nil)
 }
 
+func CleanupInvalidCodexMarketCodes(c *gin.Context) {
+	sellerID, isAdmin, ok := codexMarketSellerScope(c)
+	if !ok {
+		return
+	}
+	now := common.GetTimestamp()
+	tx := model.DB.Where(
+		"(status = ? OR (status = ? AND expired_at > 0 AND expired_at < ?))",
+		model.CodexMarketCodeDisabled,
+		model.CodexMarketCodeUnused,
+		now,
+	)
+	if !isAdmin || c.Query("seller_id") != "" {
+		tx = tx.Where("seller_id = ?", sellerID)
+	}
+	if productID, _ := strconv.Atoi(c.Query("product_id")); productID > 0 {
+		tx = tx.Where("product_id = ?", productID)
+	}
+	result := tx.Delete(&model.CodexMarketCode{})
+	if result.Error != nil {
+		common.ApiError(c, result.Error)
+		return
+	}
+	common.ApiSuccess(c, gin.H{"deleted": result.RowsAffected})
+}
+
 func RedeemCodexMarketCode(c *gin.Context) {
 	userID := c.GetInt("id")
 	req := codexMarketRedeemRequest{}

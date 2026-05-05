@@ -188,6 +188,14 @@ export async function disableSellerCodexMarketCode(id: number) {
   return res.data as { success: boolean; message?: string }
 }
 
+export async function cleanupInvalidSellerCodexMarketCodes(params?: {
+  product_id?: number
+  seller_id?: number
+}) {
+  const res = await api.post('/api/codex_market/seller/codes/cleanup_invalid', undefined, { params })
+  return res.data as { success: boolean; message?: string; data?: { deleted?: number } }
+}
+
 export async function generateSellerCodexMarketCodes(payload: {
   product_id: number
   count: number

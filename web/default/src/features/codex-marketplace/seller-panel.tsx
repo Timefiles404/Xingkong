@@ -15,6 +15,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import {
+  cleanupInvalidSellerCodexMarketCodes,
   createSellerCodexMarketProduct,
   deleteSellerCodexMarketProduct,
   disableSellerCodexMarketCode,
@@ -198,6 +199,20 @@ export function CodexMarketplaceSellerPanel(props: { sellerId?: number }) {
     toast.success(`已复制 ${codes.length} 个兑换码`)
   }
 
+  const cleanupInvalidCodes = async (productId?: number) => {
+    if (!window.confirm('确认清理已作废和已过期未兑换的市场兑换码？已兑换记录不会删除。')) return
+    const res = await cleanupInvalidSellerCodexMarketCodes({
+      ...(productId ? { product_id: productId } : {}),
+      seller_id: props.sellerId,
+    })
+    if (!res.success) {
+      toast.error(res.message || '清理失败')
+      return
+    }
+    toast.success(`已清理 ${res.data?.deleted || 0} 个失效兑换码`)
+    await load()
+  }
+
   const codeStatusLabel = (code: CodexMarketCode) => {
     if (code.status === 1 && code.expired_at > 0 && code.expired_at < Math.floor(Date.now() / 1000)) return '已过期'
     if (code.status === 1) return '未用'
@@ -257,6 +272,9 @@ export function CodexMarketplaceSellerPanel(props: { sellerId?: number }) {
                   <Button variant='ghost' size='sm' onClick={() => exportCodes({ product_id: product.id })}>
                     导出码
                   </Button>
+                  <Button variant='ghost' size='sm' onClick={() => cleanupInvalidCodes(product.id)}>
+                    清理失效码
+                  </Button>
                   <Button variant='ghost' size='sm' onClick={() => openEdit(product)}>
                     编辑
                   </Button>
@@ -300,9 +318,14 @@ export function CodexMarketplaceSellerPanel(props: { sellerId?: number }) {
         <CardHeader>
           <div className='flex items-center justify-between gap-2'>
             <CardTitle className='text-base'>最近兑换码</CardTitle>
-            <Button variant='ghost' size='sm' onClick={() => exportCodes()}>
-              批量导出
-            </Button>
+            <div className='flex gap-2'>
+              <Button variant='ghost' size='sm' onClick={() => cleanupInvalidCodes()}>
+                清理失效
+              </Button>
+              <Button variant='ghost' size='sm' onClick={() => exportCodes()}>
+                批量导出
+              </Button>
+            </div>
           </div>
         </CardHeader>
         <CardContent>

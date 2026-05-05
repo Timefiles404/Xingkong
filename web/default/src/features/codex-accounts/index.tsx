@@ -1107,6 +1107,7 @@ export function CodexAccounts() {
                         <TableHead>用户</TableHead>
                         <TableHead>账号/密钥</TableHead>
                         <TableHead>已用托管额度</TableHead>
+                        <TableHead>市场售出额度</TableHead>
                         <TableHead>创建时间</TableHead>
                         <TableHead className='text-right'>操作</TableHead>
                       </TableRow>
@@ -1126,6 +1127,12 @@ export function CodexAccounts() {
                             {item.account_count} / {item.key_count}
                           </TableCell>
                           <TableCell>${quotaToUsd(item.used_quota)}</TableCell>
+                          <TableCell>
+                            <div>${quotaToUsd(item.market_sold_quota)}</div>
+                            <div className='text-muted-foreground text-xs'>
+                              {item.market_sold_key_count || 0} 把 Key
+                            </div>
+                          </TableCell>
                           <TableCell>{formatTime(item.created_at)}</TableCell>
                           <TableCell className='space-x-1 text-right'>
                             <Button
