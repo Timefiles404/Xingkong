@@ -126,7 +126,7 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 		if accountID := c.GetInt("codex_account_id"); accountID > 0 && shouldCooldownCodexAccountForLocalError(err) {
 			model.MarkCodexAccountModelRelayResult(accountID, codexRequestedModel(c, info), false, err.Error(), 30, false)
 		}
-		releaseSelectedCodexAccount(c)
+		releaseAndClearSelectedCodexAccount(c)
 		return resp, err
 	}
 	if resp != nil {
@@ -136,6 +136,9 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 					model.MarkCodexAccountModelRelayResult(accountID, codexRequestedModel(c, info), false, resp.Status, cooldown, accountWide)
 				}
 			}
+		}
+		if resp.StatusCode != http.StatusOK {
+			releaseAndClearSelectedCodexAccount(c)
 		}
 	}
 	return resp, nil
@@ -280,6 +283,16 @@ func releaseSelectedCodexAccount(c *gin.Context) {
 	}
 	model.ReleaseCodexAccountRequest(accountID)
 	c.Set("codex_account_released", true)
+}
+
+func releaseAndClearSelectedCodexAccount(c *gin.Context) {
+	releaseSelectedCodexAccount(c)
+	if c == nil || c.Keys == nil {
+		return
+	}
+	delete(c.Keys, "codex_account_id")
+	delete(c.Keys, "codex_selected_account")
+	delete(c.Keys, "codex_account_released")
 }
 
 func markCodexAccountAfterResponse(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response, apiErr *types.NewAPIError) {
