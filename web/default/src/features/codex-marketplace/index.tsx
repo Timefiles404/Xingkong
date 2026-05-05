@@ -40,7 +40,7 @@ function sellerName(item: { seller_display_name?: string; seller_username?: stri
   return item.seller_display_name || item.seller_username || `卖家 #${item.seller_id}`
 }
 
-function keyUsagePercent(item: CodexMarketKey) {
+function keyUsagePercent(item: Pick<CodexMarketKey, 'remain_quota' | 'used_quota' | 'unlimited_quota'>) {
   const total = (item.remain_quota || 0) + (item.used_quota || 0)
   if (item.unlimited_quota || total <= 0) return 0
   return Math.max(0, Math.min(100, (item.used_quota / total) * 100))
@@ -61,6 +61,10 @@ export function CodexMarketplace() {
   const activeProducts = useMemo(
     () => products.filter((item) => item.status === 1),
     [products]
+  )
+  const approvedPaymentKeys = useMemo(
+    () => payments.filter((item) => item.status === 2 && item.token_id > 0),
+    [payments]
   )
 
   const load = async () => {
@@ -292,7 +296,51 @@ export function CodexMarketplace() {
                   </Card>
                 )
               })}
-              {keys.length === 0 && (
+              {approvedPaymentKeys.map((payment) => {
+                const percent = keyUsagePercent({
+                  remain_quota: payment.remain_quota || 0,
+                  used_quota: payment.used_quota || 0,
+                  unlimited_quota: !!payment.unlimited_quota,
+                })
+                const total = (payment.remain_quota || 0) + (payment.used_quota || 0)
+                return (
+                  <Card key={`payment-${payment.id}`}>
+                    <CardHeader>
+                      <div className='flex items-start justify-between gap-3'>
+                        <div>
+                          <CardTitle className='text-base'>{payment.product_title || payment.token_name || `商品 #${payment.product_id}`}</CardTitle>
+                          <div className='text-muted-foreground mt-1 text-xs'>
+                            支付确认发货 · {payment.key || payment.token_name || `Token #${payment.token_id}`}
+                          </div>
+                        </div>
+                        <Badge variant='default'>可用</Badge>
+                      </div>
+                    </CardHeader>
+                    <CardContent className='space-y-3'>
+                      <div className='space-y-1'>
+                        <div className='flex items-center justify-between text-xs'>
+                          <span>额度使用</span>
+                          <span className='text-muted-foreground'>
+                            ${quotaToUsd(payment.used_quota)} / ${quotaToUsd(total)}
+                          </span>
+                        </div>
+                        <Progress value={percent} className='h-1.5' />
+                        <div className='text-muted-foreground text-xs'>剩余 ${quotaToUsd(payment.remain_quota)}</div>
+                      </div>
+                      <div className='text-muted-foreground text-xs'>
+                        RPM {payment.key_rpm || '不限'} · 通过时间：{formatTime(payment.reviewed_at || payment.updated_at)}
+                      </div>
+                      <div className='flex justify-end'>
+                        <Button variant='outline' size='sm' onClick={() => copyPaymentKey(payment.id)}>
+                          <Copy className='mr-2 h-4 w-4' />
+                          复制完整 Key
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )
+              })}
+              {keys.length === 0 && approvedPaymentKeys.length === 0 && (
                 <div className='text-muted-foreground rounded-xl border border-dashed p-10 text-center text-sm lg:col-span-2'>
                   还没有兑换过市场 Key。
                 </div>
