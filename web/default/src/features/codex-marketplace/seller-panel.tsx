@@ -45,6 +45,7 @@ type ProductForm = {
   paymentText: string
   paymentUrl: string
   paymentConfirmText: string
+  stockCount: string
   status: number
 }
 
@@ -58,6 +59,7 @@ const emptyForm: ProductForm = {
   paymentText: '',
   paymentUrl: '',
   paymentConfirmText: '',
+  stockCount: '1',
   status: 2,
 }
 
@@ -122,18 +124,21 @@ export function CodexMarketplaceSellerPanel(props: { sellerId?: number }) {
       paymentText: product.payment_text || '',
       paymentUrl: product.payment_url || '',
       paymentConfirmText: product.payment_confirm_text || '',
+      stockCount: '0',
       status: product.status || 2,
     })
     setProductOpen(true)
   }
 
   const saveProduct = async () => {
+    const quota = usdToQuota(form.quotaUsd)
+    const keyRpm = Math.max(0, Number.parseInt(form.keyRpm, 10) || 0)
     const payload = {
       title: form.title,
       description: form.description,
       models: form.models,
-      quota: usdToQuota(form.quotaUsd),
-      key_rpm: Math.max(0, Number.parseInt(form.keyRpm, 10) || 0),
+      quota,
+      key_rpm: keyRpm,
       payment_type: form.paymentType,
       payment_text: form.paymentText,
       payment_url: form.paymentUrl,
@@ -141,12 +146,35 @@ export function CodexMarketplaceSellerPanel(props: { sellerId?: number }) {
       status: form.status,
       seller_id: props.sellerId,
     }
+    const stockCount = Math.max(0, Number.parseInt(form.stockCount, 10) || 0)
     const res = editing
       ? await updateSellerCodexMarketProduct(editing.id, payload)
       : await createSellerCodexMarketProduct(payload)
     if (!res.success) {
       toast.error(res.message || '保存失败')
       return
+    }
+    const productId = res.data?.id || editing?.id || 0
+    if (stockCount > 0 && productId > 0) {
+      const codeRes = await generateSellerCodexMarketCodes({
+        product_id: productId,
+        count: stockCount,
+        quota,
+        key_rpm: keyRpm,
+      })
+      if (!codeRes.success) {
+        toast.error(codeRes.message || '商品已保存，但生成上架库存失败')
+      } else {
+        const codes = codeRes.data?.codes || []
+        if (codes.length > 0) {
+          await navigator.clipboard.writeText(codes.join('\n'))
+          toast.success(`商品已保存，已上架 ${codes.length} 个库存并复制兑换码`)
+        } else {
+          toast.success('商品已保存')
+        }
+      }
+    } else {
+      toast.success('商品已保存')
     }
     setProductOpen(false)
     await load()
@@ -454,6 +482,15 @@ export function CodexMarketplaceSellerPanel(props: { sellerId?: number }) {
             <Input value={form.quotaUsd} onChange={(e) => setForm({ ...form, quotaUsd: e.target.value })} />
             <Label>默认 Key RPM（0 为不限）</Label>
             <Input value={form.keyRpm} onChange={(e) => setForm({ ...form, keyRpm: e.target.value })} />
+            <Label>{editing ? '本次追加上架数量' : '本次上架数量'}</Label>
+            <Input
+              value={form.stockCount}
+              onChange={(e) => setForm({ ...form, stockCount: e.target.value })}
+              placeholder='0 为只保存商品，不生成库存'
+            />
+            <div className='text-muted-foreground text-xs'>
+              每个库存会生成一个兑换码；一次最多 200 个，生成后会自动复制。
+            </div>
             <Label>外部支付方式</Label>
             <Input value={form.paymentType} onChange={(e) => setForm({ ...form, paymentType: e.target.value })} placeholder='text 或 link' />
             <Label>支付说明 / 联系方式</Label>
