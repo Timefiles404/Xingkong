@@ -415,6 +415,42 @@ func CleanupInvalidCodexMarketCodes(c *gin.Context) {
 	common.ApiSuccess(c, gin.H{"deleted": result.RowsAffected})
 }
 
+func countAvailableCodexMarketCodes(tx *gorm.DB, productID int, now int64) (int64, error) {
+	var count int64
+	err := tx.Model(&model.CodexMarketCode{}).
+		Where("product_id = ? AND status = ? AND (expired_at < 0 OR expired_at > ?)", productID, model.CodexMarketCodeUnused, now).
+		Count(&count).Error
+	return count, err
+}
+
+func takeAvailableCodexMarketCodeTx(tx *gorm.DB, productID int, now int64) (*model.CodexMarketCode, error) {
+	var code model.CodexMarketCode
+	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("product_id = ? AND status = ? AND (expired_at < 0 OR expired_at > ?)", productID, model.CodexMarketCodeUnused, now).
+		Order("id asc").
+		First(&code).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, fmt.Errorf("商品库存不足")
+		}
+		return nil, err
+	}
+	return &code, nil
+}
+
+func unlistCodexMarketProductIfSoldOut(tx *gorm.DB, productID int, now int64) error {
+	available, err := countAvailableCodexMarketCodes(tx, productID, now)
+	if err != nil {
+		return err
+	}
+	if available > 0 {
+		return nil
+	}
+	return tx.Model(&model.CodexMarketProduct{}).
+		Where("id = ? AND status = ?", productID, model.CodexMarketProductListed).
+		Update("status", model.CodexMarketProductUnlisted).Error
+}
+
 func RedeemCodexMarketCode(c *gin.Context) {
 	userID := c.GetInt("id")
 	req := codexMarketRedeemRequest{}
@@ -459,6 +495,9 @@ func RedeemCodexMarketCode(c *gin.Context) {
 			"token_id":    token.Id,
 			"redeemed_at": now,
 		}).Error; err != nil {
+			return err
+		}
+		if err := unlistCodexMarketProductIfSoldOut(tx, product.Id, now); err != nil {
 			return err
 		}
 		fullKey = "sk-" + key
@@ -506,6 +545,17 @@ func SubmitCodexMarketPayment(c *gin.Context) {
 	}
 	if userID == product.SellerID {
 		common.ApiErrorMsg(c, "不能购买自己的商品")
+		return
+	}
+	now := common.GetTimestamp()
+	available, err := countAvailableCodexMarketCodes(model.DB, product.Id, now)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if available <= 0 {
+		_ = unlistCodexMarketProductIfSoldOut(model.DB, product.Id, now)
+		common.ApiErrorMsg(c, "商品库存不足")
 		return
 	}
 	payment := model.CodexMarketPayment{
@@ -608,6 +658,7 @@ func ReviewCodexMarketPayment(c *gin.Context) {
 		return
 	}
 	var fullKey string
+	now := common.GetTimestamp()
 	err = model.DB.Transaction(func(tx *gorm.DB) error {
 		var payment model.CodexMarketPayment
 		query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", id)
@@ -623,15 +674,38 @@ func ReviewCodexMarketPayment(c *gin.Context) {
 		updates := map[string]any{
 			"status":      req.Status,
 			"message":     strings.TrimSpace(req.Message),
-			"reviewed_at": common.GetTimestamp(),
+			"reviewed_at": now,
 		}
 		if req.Status == model.CodexMarketPaymentApproved {
 			var product model.CodexMarketProduct
 			if err := tx.Where("id = ?", payment.ProductID).First(&product).Error; err != nil {
 				return err
 			}
-			token, key, err := createCodexMarketTokenTx(tx, payment.SellerID, "市场支付-"+product.Title, payment.Quota, payment.KeyRPM, product.Models)
+			code, err := takeAvailableCodexMarketCodeTx(tx, payment.ProductID, now)
 			if err != nil {
+				return err
+			}
+			quota := code.Quota
+			if quota <= 0 {
+				quota = payment.Quota
+			}
+			keyRPM := code.KeyRPM
+			if keyRPM <= 0 {
+				keyRPM = payment.KeyRPM
+			}
+			token, key, err := createCodexMarketTokenTx(tx, payment.SellerID, "市场支付-"+product.Title, quota, keyRPM, product.Models)
+			if err != nil {
+				return err
+			}
+			if err := tx.Model(&model.CodexMarketCode{}).Where("id = ? AND status = ?", code.Id, model.CodexMarketCodeUnused).Updates(map[string]any{
+				"status":      model.CodexMarketCodeRedeemed,
+				"buyer_id":    payment.BuyerID,
+				"token_id":    token.Id,
+				"redeemed_at": now,
+			}).Error; err != nil {
+				return err
+			}
+			if err := unlistCodexMarketProductIfSoldOut(tx, payment.ProductID, now); err != nil {
 				return err
 			}
 			updates["token_id"] = token.Id

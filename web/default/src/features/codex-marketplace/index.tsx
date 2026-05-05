@@ -63,8 +63,11 @@ export function CodexMarketplace() {
     [products]
   )
   const approvedPaymentKeys = useMemo(
-    () => payments.filter((item) => item.status === 2 && item.token_id > 0),
-    [payments]
+    () => {
+      const codeTokenIds = new Set(keys.map((item) => item.token_id).filter(Boolean))
+      return payments.filter((item) => item.status === 2 && item.token_id > 0 && !codeTokenIds.has(item.token_id))
+    },
+    [keys, payments]
   )
 
   const load = async () => {
