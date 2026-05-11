@@ -679,6 +679,37 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 	return true
 }
 
+func ForceUpdateChannelStatus(channelId int, status int, reason string, extraInfo map[string]interface{}) (bool, error) {
+	channel, err := GetChannelById(channelId, true)
+	if err != nil {
+		return false, err
+	}
+
+	info := channel.GetOtherInfo()
+	if reason != "" {
+		info["status_reason"] = reason
+	}
+	info["status_time"] = common.GetTimestamp()
+	for key, value := range extraInfo {
+		info[key] = value
+	}
+	channel.SetOtherInfo(info)
+
+	changed := channel.Status != status
+	channel.Status = status
+	if err = channel.SaveWithoutKey(); err != nil {
+		common.SysLog(fmt.Sprintf("failed to force update channel status: channel_id=%d, status=%d, error=%v", channel.Id, status, err))
+		return false, err
+	}
+	if err = UpdateAbilityStatus(channelId, status == common.ChannelStatusEnabled); err != nil {
+		common.SysLog(fmt.Sprintf("failed to update ability status: channel_id=%d, error=%v", channelId, err))
+	}
+	if common.MemoryCacheEnabled {
+		InitChannelCache()
+	}
+	return changed, nil
+}
+
 func EnableChannelByTag(tag string) error {
 	err := DB.Model(&Channel{}).Where("tag = ?", tag).Update("status", common.ChannelStatusEnabled).Error
 	if err != nil {
