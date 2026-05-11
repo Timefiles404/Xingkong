@@ -167,6 +167,92 @@ func TestRecordUsageSettlementSplitsWalletLotsAndSubtractsUpstreamCostFromCashFl
 	assert.InDelta(t, 10-totalUpstreamCost, overview.Summary.CashFlowCNY, 0.000001)
 }
 
+func TestRecordSubscriptionSettlementKeepsCostAfterPaidLotDepleted(t *testing.T) {
+	truncateTables(t)
+	insertProfitTestUser(t, 106, 0)
+
+	require.NoError(t, DB.Create(&Channel{Id: 202, Name: "subscription-profit-channel"}).Error)
+	require.NoError(t, DB.Create(&Model{
+		ModelName: "subscription-profit-model",
+		AdminMeta: `{"upstreamPricing":{"pricingMode":"per-token","ratio":1,"completionRatio":2,"cacheRatio":0.5}}`,
+	}).Error)
+	require.NoError(t, DB.Create(&UserSubscription{
+		Id:          402,
+		UserId:      106,
+		PlanId:      302,
+		PaidAmount:  100,
+		AmountTotal: 200,
+		AmountUsed:  95,
+		Status:      "active",
+		StartTime:   time.Now().Add(-time.Hour).Unix(),
+		EndTime:     time.Now().Add(24 * time.Hour).Unix(),
+	}).Error)
+	require.NoError(t, DB.Create(&SubscriptionLot{
+		UserId:                      106,
+		UserSubscriptionId:          402,
+		PlanId:                      302,
+		SourceType:                  ProfitSubscriptionSourceWallet,
+		PaidQuota:                   100,
+		RemainingQuota:              5,
+		GrossCNYBasis:               10,
+		GrossCNYRemaining:           0.5,
+		OriginalUSDValue:            0.01,
+		Status:                      "active",
+		DownstreamCNYPerUSDSnapshot: 60,
+	}).Error)
+
+	summary, err := RecordUsageSettlementWithSummary(ProfitUsageInput{
+		RequestId:                         "req-sub-cross-paid-end",
+		UserId:                            106,
+		SourceType:                        ProfitLotTypeSubscription,
+		SubscriptionId:                    402,
+		ModelName:                         "subscription-profit-model",
+		ChannelId:                         202,
+		PromptTokens:                      600,
+		CompletionTokens:                  400,
+		QuotaUsed:                         10,
+		DownstreamPricingMode:             "per-token",
+		DownstreamModelRatioSnapshot:      2.5,
+		DownstreamCompletionRatioSnapshot: 6,
+		DownstreamGroupRatioSnapshot:      1,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, summary)
+	assert.InDelta(t, 0.5, summary.RealizedRevenueCNY, 0.000001)
+	assert.True(t, summary.UpstreamCostCNY > 0)
+
+	var first UsageSettlement
+	require.NoError(t, DB.Where("request_id = ?", "req-sub-cross-paid-end").First(&first).Error)
+	assert.Equal(t, int64(10), first.QuotaUsed)
+	assert.InDelta(t, 0.5, first.RealizedRevenueCNY, 0.000001)
+
+	var lot SubscriptionLot
+	require.NoError(t, DB.Where("user_subscription_id = ?", 402).First(&lot).Error)
+	assert.Equal(t, int64(0), lot.RemainingQuota)
+	assert.InDelta(t, 0, lot.GrossCNYRemaining, 0.000001)
+
+	summary, err = RecordUsageSettlementWithSummary(ProfitUsageInput{
+		RequestId:                         "req-sub-bonus-cost-only",
+		UserId:                            106,
+		SourceType:                        ProfitLotTypeSubscription,
+		SubscriptionId:                    402,
+		ModelName:                         "subscription-profit-model",
+		ChannelId:                         202,
+		PromptTokens:                      300,
+		CompletionTokens:                  100,
+		QuotaUsed:                         7,
+		DownstreamPricingMode:             "per-token",
+		DownstreamModelRatioSnapshot:      2.5,
+		DownstreamCompletionRatioSnapshot: 6,
+		DownstreamGroupRatioSnapshot:      1,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, summary)
+	assert.InDelta(t, 0, summary.RealizedRevenueCNY, 0.000001)
+	assert.True(t, summary.UpstreamCostCNY > 0)
+	assert.InDelta(t, -summary.UpstreamCostCNY, summary.RequestGrossProfitCNY, 0.000001)
+}
+
 func TestAdminInvalidateUserSubscriptionTransfersRemainingLiabilityToWallet(t *testing.T) {
 	truncateTables(t)
 	insertProfitTestUser(t, 104, 0)

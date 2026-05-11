@@ -1046,15 +1046,16 @@ func consumeSubscriptionLotForUsageTx(tx *gorm.DB, input ProfitUsageInput, downs
 	if err := tx.Where("user_subscription_id = ?", input.SubscriptionId).First(&lot).Error; err != nil {
 		return err
 	}
-	if lot.RemainingQuota <= 0 {
-		return nil
+	useQuota := int64(0)
+	revenue := 0.0
+	if lot.RemainingQuota > 0 {
+		useQuota = minInt64(input.QuotaUsed, lot.RemainingQuota)
+		revenue = allocateLotPortion(lot.GrossCNYRemaining, lot.RemainingQuota, useQuota)
 	}
-	useQuota := minInt64(input.QuotaUsed, lot.RemainingQuota)
-	revenue := allocateLotPortion(lot.GrossCNYRemaining, lot.RemainingQuota, useQuota)
 	downstreamPrompt, downstreamCompletion, downstreamCache := effectiveDownstreamPricesFromInput(
 		input,
 		lot.DownstreamCNYPerUSDSnapshot,
-		useQuota,
+		input.QuotaUsed,
 		revenue,
 		input.PromptTokens,
 		input.CompletionTokens,
@@ -1062,13 +1063,15 @@ func consumeSubscriptionLotForUsageTx(tx *gorm.DB, input ProfitUsageInput, downs
 	)
 	upstreamPromptPrice, upstreamCompletionPrice, upstreamCachePrice, upstreamPricingMode, upstreamFixedPrice, upstreamRatio, upstreamCompletionRatio, upstreamCacheRatio :=
 		effectiveUpstreamSnapshot(upstreamPricing, upstreamPrompt, upstreamCompletion, upstreamCache)
-	lot.RemainingQuota -= useQuota
-	lot.GrossCNYRemaining -= revenue
-	if lot.RemainingQuota == 0 && lot.GrossCNYRemaining < 0.000001 {
-		lot.GrossCNYRemaining = 0
-	}
-	if err := tx.Save(&lot).Error; err != nil {
-		return err
+	if useQuota > 0 {
+		lot.RemainingQuota -= useQuota
+		lot.GrossCNYRemaining -= revenue
+		if lot.RemainingQuota == 0 && lot.GrossCNYRemaining < 0.000001 {
+			lot.GrossCNYRemaining = 0
+		}
+		if err := tx.Save(&lot).Error; err != nil {
+			return err
+		}
 	}
 	settlement := &UsageSettlement{
 		UserId:                              input.UserId,
@@ -1082,7 +1085,7 @@ func consumeSubscriptionLotForUsageTx(tx *gorm.DB, input ProfitUsageInput, downs
 		CompletionTokens:                    input.CompletionTokens,
 		CacheReadTokens:                     input.CacheReadTokens,
 		CacheWriteTokens:                    input.CacheWriteTokens,
-		QuotaUsed:                           useQuota,
+		QuotaUsed:                           input.QuotaUsed,
 		RealizedRevenueCNY:                  revenue,
 		UpstreamCostUSD:                     upstreamCostUSD,
 		UpstreamCostCNY:                     upstreamCostCNY,

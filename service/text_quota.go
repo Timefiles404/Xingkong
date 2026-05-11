@@ -370,7 +370,8 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, summary.Quota)
 	}
 
-	if err := SettleBilling(ctx, relayInfo, summary.Quota); err != nil {
+	settledQuota, err := SettleBilling(ctx, relayInfo, summary.Quota)
+	if err != nil {
 		logger.LogError(ctx, "error settling billing: "+err.Error())
 	}
 
@@ -478,7 +479,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 			CompletionTokens:                    int64(summary.CompletionTokens),
 			CacheReadTokens:                     int64(summary.CacheTokens),
 			CacheWriteTokens:                    int64(cacheWriteTokensTotal(summary)),
-			QuotaUsed:                           int64(summary.Quota),
+			QuotaUsed:                           int64(settledQuota),
 			DownstreamPricingMode:               map[bool]string{true: "per-request", false: "per-token"}[relayInfo.PriceData.UsePrice],
 			DownstreamFixedPriceUSD:             relayInfo.PriceData.ModelPrice * relayInfo.PriceData.GroupRatioInfo.GroupRatio,
 			DownstreamModelRatioSnapshot:        relayInfo.PriceData.ModelRatio,

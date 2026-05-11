@@ -229,7 +229,8 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, quota)
 	}
 
-	if err := SettleBilling(ctx, relayInfo, quota); err != nil {
+	settledQuota, err := SettleBilling(ctx, relayInfo, quota)
+	if err != nil {
 		logger.LogError(ctx, "error settling billing: "+err.Error())
 	}
 
@@ -259,7 +260,7 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 			ChannelId:                           relayInfo.ChannelId,
 			PromptTokens:                        int64(usage.InputTokens),
 			CompletionTokens:                    int64(usage.OutputTokens),
-			QuotaUsed:                           int64(quota),
+			QuotaUsed:                           int64(settledQuota),
 			DownstreamPricingMode:               map[bool]string{true: "per-request", false: "per-token"}[relayInfo.PriceData.UsePrice],
 			DownstreamFixedPriceUSD:             relayInfo.PriceData.ModelPrice * relayInfo.PriceData.GroupRatioInfo.GroupRatio,
 			DownstreamModelRatioSnapshot:        relayInfo.PriceData.ModelRatio,
@@ -386,7 +387,8 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, quota)
 	}
 
-	if err := SettleBilling(ctx, relayInfo, quota); err != nil {
+	settledQuota, err := SettleBilling(ctx, relayInfo, quota)
+	if err != nil {
 		logger.LogError(ctx, "error settling billing: "+err.Error())
 	}
 
@@ -416,7 +418,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 			ChannelId:                           relayInfo.ChannelId,
 			PromptTokens:                        int64(usage.PromptTokens),
 			CompletionTokens:                    int64(usage.CompletionTokens),
-			QuotaUsed:                           int64(quota),
+			QuotaUsed:                           int64(settledQuota),
 			DownstreamPricingMode:               map[bool]string{true: "per-request", false: "per-token"}[relayInfo.PriceData.UsePrice],
 			DownstreamFixedPriceUSD:             relayInfo.PriceData.ModelPrice * relayInfo.PriceData.GroupRatioInfo.GroupRatio,
 			DownstreamModelRatioSnapshot:        relayInfo.PriceData.ModelRatio,

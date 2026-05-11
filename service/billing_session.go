@@ -26,6 +26,7 @@ type BillingSession struct {
 	relayInfo        *relaycommon.RelayInfo
 	funding          FundingSource
 	preConsumedQuota int  // 实际预扣额度（信任用户可能为 0）
+	settledQuota     int  // 资金来源已经成功结算的额度
 	tokenConsumed    int  // 令牌额度实际扣减量
 	extraReserved    int  // 发送前补充预扣的额度（订阅退款时需要单独回滚）
 	trusted          bool // 是否命中信任额度旁路
@@ -46,6 +47,7 @@ func (s *BillingSession) Settle(actualQuota int) error {
 	}
 	delta := actualQuota - s.preConsumedQuota
 	if delta == 0 {
+		s.settledQuota = actualQuota
 		s.settled = true
 		return nil
 	}
@@ -55,6 +57,7 @@ func (s *BillingSession) Settle(actualQuota int) error {
 			return err
 		}
 		s.fundingSettled = true
+		s.settledQuota = actualQuota
 	}
 	// 2) 调整令牌额度
 	var tokenErr error
@@ -149,6 +152,12 @@ func (s *BillingSession) GetPreConsumedQuota() int {
 	return s.preConsumedQuota
 }
 
+func (s *BillingSession) GetSettledQuota() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.settledQuota
+}
+
 func (s *BillingSession) Reserve(targetQuota int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -171,6 +180,7 @@ func (s *BillingSession) Reserve(targetQuota int) error {
 	}
 
 	s.preConsumedQuota += delta
+	s.settledQuota += delta
 	s.tokenConsumed += delta
 	s.extraReserved += delta
 	s.syncRelayInfo()
@@ -222,6 +232,7 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIErro
 	}
 
 	s.preConsumedQuota = effectiveQuota
+	s.settledQuota = effectiveQuota
 
 	// ---- 同步 RelayInfo 兼容字段 ----
 	s.syncRelayInfo()
