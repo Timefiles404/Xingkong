@@ -2,10 +2,14 @@ import { useMemo, useState } from 'react'
 import {
   CheckCircle2,
   CircleAlert,
+  FileText,
   Loader2,
+  PlusCircle,
   RefreshCw,
   Search,
   Send,
+  Table2,
+  UploadCloud,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { SectionPageLayout } from '@/components/layout'
@@ -32,8 +36,10 @@ import { Textarea } from '@/components/ui/textarea'
 import { CHANNEL_TYPE_OPTIONS } from '@/features/channels/constants'
 import {
   fetchChannelLabModels,
+  importChannelLabCPAChannels,
   testChannelLabModel,
   type ChannelLabAttempt,
+  type ChannelLabCPAImportItem,
   type ChannelLabPayload,
   type ChannelLabTestResult,
 } from './api'
@@ -67,10 +73,108 @@ function resultKey(item: ChannelLabTestResult) {
 
 type TestStatus = 'pending' | 'running' | 'success' | 'failed'
 
+const CSV_TARGET_MODELS = [
+  'gpt-5.5',
+  'gpt-5.4',
+  'claude-opus-4-6',
+  'claude-sonnet-4-6',
+]
+
+type CsvModelStatus = {
+  status: TestStatus
+  endpointType?: string
+  message?: string
+}
+
+type CsvChannelRow = {
+  id: string
+  baseUrl: string
+  rawKey: string
+  key: string
+  declaredModels: string[]
+  status: TestStatus
+  message?: string
+  endpointTypes: string[]
+  availableModels: string[]
+  modelStatuses: Record<string, CsvModelStatus>
+  imported?: boolean
+  importedName?: string
+}
+
 function clampConcurrency(value: string) {
   const parsed = Number.parseInt(value, 10)
   if (!Number.isFinite(parsed)) return 4
   return Math.min(20, Math.max(1, parsed))
+}
+
+function normalizeCsvKey(key: string) {
+  return key.trim().replace(/^sk-/, '')
+}
+
+function parseCsvLine(line: string) {
+  const cells: string[] = []
+  let current = ''
+  let inQuotes = false
+  for (let i = 0; i < line.length; i += 1) {
+    const char = line[i]
+    const next = line[i + 1]
+    if (char === '"' && inQuotes && next === '"') {
+      current += '"'
+      i += 1
+      continue
+    }
+    if (char === '"') {
+      inQuotes = !inQuotes
+      continue
+    }
+    if (char === ',' && !inQuotes) {
+      cells.push(current.trim())
+      current = ''
+      continue
+    }
+    current += char
+  }
+  cells.push(current.trim())
+  return cells
+}
+
+function parseCsvChannelRows(text: string): CsvChannelRow[] {
+  const lines = text
+    .split(/\r?\n/g)
+    .map((line) => line.trim())
+    .filter(Boolean)
+  if (lines.length === 0) return []
+
+  const startIndex = lines[0]?.includes('访问地址') ? 1 : 0
+  const rows: CsvChannelRow[] = []
+  for (let index = startIndex; index < lines.length; index += 1) {
+    const cells = parseCsvLine(lines[index] || '')
+    const baseUrl = (cells[0] || '').trim()
+    const rawKey = (cells[1] || '').trim()
+    if (!baseUrl || !rawKey) continue
+    const declaredRaw = (cells[2] || '').trim()
+    const declaredModels =
+      declaredRaw === '(empty)' || declaredRaw === 'empty'
+        ? []
+        : declaredRaw
+            .split(',')
+            .map((modelName) => modelName.trim())
+            .filter(Boolean)
+    rows.push({
+      id: `${Date.now()}-${index}-${baseUrl}`,
+      baseUrl,
+      rawKey,
+      key: normalizeCsvKey(rawKey),
+      declaredModels,
+      status: 'pending',
+      endpointTypes: [],
+      availableModels: [],
+      modelStatuses: Object.fromEntries(
+        CSV_TARGET_MODELS.map((modelName) => [modelName, { status: 'pending' as TestStatus }])
+      ),
+    })
+  }
+  return rows
 }
 
 export function ChannelLab() {
@@ -93,6 +197,10 @@ export function ChannelLab() {
   const [successResults, setSuccessResults] = useState<ChannelLabTestResult[]>([])
   const [failedResults, setFailedResults] = useState<ChannelLabTestResult[]>([])
   const [detail, setDetail] = useState<ChannelLabTestResult | null>(null)
+  const [csvText, setCsvText] = useState('')
+  const [csvRows, setCsvRows] = useState<CsvChannelRow[]>([])
+  const [csvTesting, setCsvTesting] = useState(false)
+  const [csvImporting, setCsvImporting] = useState(false)
 
   const mergedModels = useMemo(() => {
     const seen = new Set<string>()
@@ -115,6 +223,11 @@ export function ChannelLab() {
     endpoint_type: endpointType === 'auto' ? '' : endpointType,
     stream,
   })
+
+  const csvImportableRows = useMemo(
+    () => csvRows.filter((row) => row.availableModels.length > 0 && !row.imported),
+    [csvRows]
+  )
 
   const handleFetchModels = async () => {
     setFetching(true)
@@ -233,6 +346,189 @@ export function ChannelLab() {
     } finally {
       setTestingAll(false)
       setTestingModels(new Set())
+    }
+  }
+
+  const updateCsvRow = (rowId: string, updater: (row: CsvChannelRow) => CsvChannelRow) => {
+    setCsvRows((prev) => prev.map((row) => (row.id === rowId ? updater(row) : row)))
+  }
+
+  const handleCsvFile = async (file: File | undefined) => {
+    if (!file) return
+    try {
+      const text = await file.text()
+      setCsvText(text)
+      const rows = parseCsvChannelRows(text)
+      setCsvRows(rows)
+      toast.success(`已读取 ${rows.length} 条 CSV 渠道`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '读取 CSV 文件失败')
+    }
+  }
+
+  const handleParseCsv = () => {
+    try {
+      const rows = parseCsvChannelRows(csvText)
+      setCsvRows(rows)
+      toast.success(`已解析 ${rows.length} 条 CSV 渠道`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '解析 CSV 失败')
+    }
+  }
+
+  const handleCsvBatchTest = async () => {
+    let rows = csvRows
+    if (rows.length === 0) {
+      try {
+        rows = parseCsvChannelRows(csvText)
+        setCsvRows(rows)
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : '解析 CSV 失败')
+        return
+      }
+    }
+    if (rows.length === 0) {
+      toast.error('没有可测试的 CSV 渠道')
+      return
+    }
+
+    const workerCount = Math.min(clampConcurrency(concurrency), rows.length)
+    const payloadBase = basePayload()
+    let cursor = 0
+    let usableCount = 0
+    setCsvTesting(true)
+    setCsvRows((prev) =>
+      prev.map((row) => ({
+        ...row,
+        status: 'pending',
+        message: '',
+        endpointTypes: [],
+        availableModels: [],
+        imported: false,
+        importedName: undefined,
+        modelStatuses: Object.fromEntries(
+          CSV_TARGET_MODELS.map((modelName) => [modelName, { status: 'pending' as TestStatus }])
+        ),
+      }))
+    )
+
+    try {
+      await Promise.all(
+        Array.from({ length: workerCount }, async () => {
+          while (cursor < rows.length) {
+            const row = rows[cursor]
+            cursor += 1
+            updateCsvRow(row.id, (current) => ({
+              ...current,
+              status: 'running',
+              message: '正在测试目标模型',
+            }))
+
+            const availableModels: string[] = []
+            const endpointSet = new Set<string>()
+            const modelStatuses: Record<string, CsvModelStatus> = {}
+            for (const modelName of CSV_TARGET_MODELS) {
+              updateCsvRow(row.id, (current) => ({
+                ...current,
+                modelStatuses: {
+                  ...current.modelStatuses,
+                  [modelName]: { status: 'running' },
+                },
+              }))
+              try {
+                const res = await testChannelLabModel({
+                  ...payloadBase,
+                  base_url: row.baseUrl,
+                  key: row.key,
+                  model: modelName,
+                })
+                if (res.success) {
+                  availableModels.push(modelName)
+                  endpointSet.add(res.endpoint_type || 'auto')
+                }
+                modelStatuses[modelName] = {
+                  status: res.success ? 'success' : 'failed',
+                  endpointType: res.endpoint_type,
+                  message: res.message,
+                }
+              } catch (error) {
+                modelStatuses[modelName] = {
+                  status: 'failed',
+                  message: error instanceof Error ? error.message : '测试失败',
+                }
+              }
+              updateCsvRow(row.id, (current) => ({
+                ...current,
+                modelStatuses: {
+                  ...current.modelStatuses,
+                  [modelName]: modelStatuses[modelName],
+                },
+              }))
+            }
+
+            if (availableModels.length > 0) usableCount += 1
+            updateCsvRow(row.id, (current) => ({
+              ...current,
+              status: availableModels.length > 0 ? 'success' : 'failed',
+              message:
+                availableModels.length > 0
+                  ? `可用 ${availableModels.length} 个目标模型`
+                  : '四个目标模型均不可用',
+              endpointTypes: Array.from(endpointSet),
+              availableModels,
+              modelStatuses: {
+                ...current.modelStatuses,
+                ...modelStatuses,
+              },
+            }))
+          }
+        })
+      )
+      toast.success(`CSV 批测完成：${usableCount}/${rows.length} 个渠道有可用目标模型`)
+    } finally {
+      setCsvTesting(false)
+    }
+  }
+
+  const handleImportCsvCPAChannels = async () => {
+    if (csvImportableRows.length === 0) {
+      toast.error('没有可导入的可用渠道')
+      return
+    }
+    const items: ChannelLabCPAImportItem[] = csvImportableRows.map((row) => ({
+      client_id: row.id,
+      base_url: row.baseUrl,
+      type,
+      key: row.key,
+      proxy: proxy.trim(),
+      skip_tls_verify: skipTLSVerify,
+      available_models: row.availableModels,
+      model_endpoint_types: Object.fromEntries(
+        Object.entries(row.modelStatuses)
+          .filter(([, value]) => value.status === 'success' && value.endpointType)
+          .map(([modelName, value]) => [modelName, value.endpointType as string])
+      ),
+    }))
+    setCsvImporting(true)
+    try {
+      const res = await importChannelLabCPAChannels(items)
+      if (!res.success) throw new Error(res.message || '导入失败')
+      const importedByClientId = new Map(
+        (res.data?.items || []).map((item) => [item.client_id || '', item.name])
+      )
+      setCsvRows((prev) =>
+        prev.map((row) => {
+          const importedName = importedByClientId.get(row.id)
+          return importedName
+            ? { ...row, imported: true, importedName }
+            : row
+        })
+      )
+      toast.success(res.message || `已导入 ${res.data?.total || items.length} 个渠道`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '导入失败')
+    } finally {
+      setCsvImporting(false)
     }
   }
 
@@ -448,6 +744,82 @@ export function ChannelLab() {
           </div>
         </div>
 
+        <Card className='mt-4'>
+          <CardHeader>
+            <CardTitle className='flex items-center gap-2'>
+              <Table2 className='h-4 w-4' />
+              CSV 批量探测与 CPA 导入
+            </CardTitle>
+          </CardHeader>
+          <CardContent className='space-y-4'>
+            <div className='grid gap-4 lg:grid-cols-[1fr_260px]'>
+              <div className='space-y-2'>
+                <Label>CSV 内容</Label>
+                <Textarea
+                  className='min-h-36 font-mono text-xs'
+                  value={csvText}
+                  onChange={(event) => setCsvText(event.target.value)}
+                  placeholder='访问地址,可用密钥,可用模型'
+                />
+              </div>
+              <div className='space-y-3 rounded-lg border p-3'>
+                <div className='text-sm font-medium'>固定测试模型</div>
+                <div className='flex flex-wrap gap-2'>
+                  {CSV_TARGET_MODELS.map((modelName) => (
+                    <Badge key={modelName} variant='outline' className='font-mono'>
+                      {modelName}
+                    </Badge>
+                  ))}
+                </div>
+                <label className='hover:bg-accent flex cursor-pointer items-center gap-2 rounded-md border border-dashed px-3 py-2 text-sm transition'>
+                  <UploadCloud className='h-4 w-4' />
+                  读取 CSV 文件
+                  <input
+                    className='hidden'
+                    type='file'
+                    accept='.csv,text/csv,text/plain'
+                    onChange={(event) => {
+                      void handleCsvFile(event.target.files?.[0])
+                      event.currentTarget.value = ''
+                    }}
+                  />
+                </label>
+                <div className='flex flex-wrap gap-2'>
+                  <Button variant='outline' onClick={handleParseCsv}>
+                    <FileText className='h-4 w-4' />
+                    解析
+                  </Button>
+                  <Button onClick={handleCsvBatchTest} disabled={csvTesting}>
+                    {csvTesting ? (
+                      <Loader2 className='h-4 w-4 animate-spin' />
+                    ) : (
+                      <RefreshCw className='h-4 w-4' />
+                    )}
+                    批量测试
+                  </Button>
+                </div>
+                <Button
+                  className='w-full'
+                  variant='default'
+                  onClick={handleImportCsvCPAChannels}
+                  disabled={csvImporting || csvImportableRows.length === 0 || csvTesting}
+                >
+                  {csvImporting ? (
+                    <Loader2 className='h-4 w-4 animate-spin' />
+                  ) : (
+                    <PlusCircle className='h-4 w-4' />
+                  )}
+                  导入可用渠道到 CPA
+                </Button>
+                <div className='text-muted-foreground text-xs'>
+                  导入时会自动去掉密钥开头的 sk-，渠道名为 auto-随机值-GPT/CLAUDE/GPTCLAUDE。
+                </div>
+              </div>
+            </div>
+            <CsvResultTable rows={csvRows} testing={csvTesting} />
+          </CardContent>
+        </Card>
+
         <Dialog open={!!detail} onOpenChange={(open) => !open && setDetail(null)}>
           <DialogContent className='max-h-[86vh] overflow-hidden sm:max-w-5xl'>
             <DialogHeader>
@@ -503,6 +875,104 @@ function StatusBadge({ status }: { status: TestStatus }) {
   if (status === 'success') return <Badge variant='default'>成功</Badge>
   if (status === 'failed') return <Badge variant='destructive'>失败</Badge>
   return <Badge variant='secondary'>等待</Badge>
+}
+
+function CsvResultTable({
+  rows,
+  testing,
+}: {
+  rows: CsvChannelRow[]
+  testing: boolean
+}) {
+  if (rows.length === 0) {
+    return (
+      <div className='text-muted-foreground rounded-lg border border-dashed p-6 text-center text-sm'>
+        CSV 解析或测试后，会在这里显示端点地址、端点类型和四个目标模型的实际可用情况。
+      </div>
+    )
+  }
+  return (
+    <div className='overflow-hidden rounded-lg border'>
+      <div className='bg-muted/50 grid grid-cols-[minmax(220px,1.2fr)_140px_minmax(260px,1fr)_110px] gap-3 px-3 py-2 text-xs font-medium'>
+        <div>端点地址</div>
+        <div>端点类型</div>
+        <div>实际可用模型</div>
+        <div>状态</div>
+      </div>
+      <div className='divide-y'>
+        {rows.map((row) => (
+          <div
+            key={row.id}
+            className='grid grid-cols-[minmax(220px,1.2fr)_140px_minmax(260px,1fr)_110px] gap-3 px-3 py-3 text-sm'
+          >
+            <div className='min-w-0'>
+              <div className='break-all font-mono text-xs'>{row.baseUrl}</div>
+              <div className='text-muted-foreground mt-1 text-xs'>
+                CSV 声明 {row.declaredModels.length || 0} 个模型，Key 已去除 sk- 前缀
+              </div>
+            </div>
+            <div className='flex flex-wrap content-start gap-1'>
+              {row.endpointTypes.length === 0 ? (
+                <span className='text-muted-foreground text-xs'>-</span>
+              ) : (
+                row.endpointTypes.map((endpointType) => (
+                  <Badge key={endpointType} variant='outline'>
+                    {endpointType}
+                  </Badge>
+                ))
+              )}
+            </div>
+            <div className='space-y-2'>
+              <div className='flex flex-wrap gap-1'>
+                {row.availableModels.length === 0 ? (
+                  <span className='text-muted-foreground text-xs'>暂无可用目标模型</span>
+                ) : (
+                  row.availableModels.map((modelName) => (
+                    <Badge key={modelName} variant='default' className='font-mono'>
+                      {modelName}
+                    </Badge>
+                  ))
+                )}
+              </div>
+              <div className='flex flex-wrap gap-1'>
+                {CSV_TARGET_MODELS.map((modelName) => {
+                  const status = row.modelStatuses[modelName]?.status || 'pending'
+                  return (
+                    <Badge
+                      key={modelName}
+                      variant={
+                        status === 'success'
+                          ? 'default'
+                          : status === 'failed'
+                            ? 'destructive'
+                            : 'outline'
+                      }
+                      className='font-mono text-[10px]'
+                      title={row.modelStatuses[modelName]?.message || modelName}
+                    >
+                      {status === 'running' && <Loader2 className='h-3 w-3 animate-spin' />}
+                      {modelName}
+                    </Badge>
+                  )
+                })}
+              </div>
+            </div>
+            <div className='flex flex-col items-start gap-1'>
+              <StatusBadge status={row.status} />
+              {row.imported && (
+                <Badge variant='secondary' className='max-w-full truncate' title={row.importedName}>
+                  已导入 {row.importedName}
+                </Badge>
+              )}
+              {testing && row.status === 'running' && (
+                <span className='text-muted-foreground text-xs'>测试中...</span>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
 }
 
 function StatusSummary({ statuses }: { statuses: Record<string, TestStatus> }) {

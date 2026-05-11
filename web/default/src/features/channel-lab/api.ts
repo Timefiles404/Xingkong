@@ -64,6 +64,32 @@ export type ChannelLabTestAllResponse = {
   }
 }
 
+export type ChannelLabCPAImportItem = {
+  client_id?: string
+  base_url: string
+  type: number
+  key: string
+  proxy?: string
+  skip_tls_verify?: boolean
+  available_models: string[]
+  model_endpoint_types?: Record<string, string>
+}
+
+export type ChannelLabCPAImportResponse = {
+  success: boolean
+  message?: string
+  data?: {
+    items: {
+      client_id?: string
+      id: number
+      name: string
+      base_url: string
+      available_models: string[]
+    }[]
+    total: number
+  }
+}
+
 export async function fetchChannelLabModels(payload: ChannelLabPayload) {
   const res = await api.post('/api/channel_lab/fetch_models', payload)
   return res.data as ChannelLabFetchModelsResponse
@@ -77,4 +103,11 @@ export async function testChannelLabModel(payload: ChannelLabPayload) {
 export async function testAllChannelLabModels(payload: ChannelLabPayload) {
   const res = await api.post('/api/channel_lab/test_all', payload)
   return res.data as ChannelLabTestAllResponse
+}
+
+export async function importChannelLabCPAChannels(
+  items: ChannelLabCPAImportItem[]
+) {
+  const res = await api.post('/api/channel_lab/import_cpa', { items })
+  return res.data as ChannelLabCPAImportResponse
 }

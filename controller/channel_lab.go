@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
 )
@@ -42,6 +43,29 @@ type channelLabTestAttempt struct {
 	Success      bool                  `json:"success"`
 	Message      string                `json:"message,omitempty"`
 	Detail       *channelLabTestDetail `json:"detail,omitempty"`
+}
+
+type channelLabCPAImportRequest struct {
+	Items []channelLabCPAImportItem `json:"items"`
+}
+
+type channelLabCPAImportItem struct {
+	ClientID           string            `json:"client_id"`
+	BaseURL            string            `json:"base_url"`
+	Type               int               `json:"type"`
+	Key                string            `json:"key"`
+	Proxy              string            `json:"proxy"`
+	SkipTLSVerify      bool              `json:"skip_tls_verify"`
+	AvailableModels    []string          `json:"available_models"`
+	ModelEndpointTypes map[string]string `json:"model_endpoint_types"`
+}
+
+type channelLabCPAImportResult struct {
+	ClientID        string   `json:"client_id"`
+	ID              int      `json:"id"`
+	Name            string   `json:"name"`
+	BaseURL         string   `json:"base_url"`
+	AvailableModels []string `json:"available_models"`
 }
 
 func ChannelLabTest(c *gin.Context) {
@@ -104,6 +128,53 @@ func ChannelLabTestAll(c *gin.Context) {
 	})
 }
 
+func ChannelLabImportCPAChannels(c *gin.Context) {
+	var req channelLabCPAImportRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "Invalid request: " + err.Error()})
+		return
+	}
+	if len(req.Items) == 0 {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "没有可导入的渠道"})
+		return
+	}
+
+	channels := make([]*model.Channel, 0, len(req.Items))
+	for _, item := range req.Items {
+		channel, err := buildChannelLabCPAChannel(item)
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+			return
+		}
+		if err := channel.Insert(); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		channels = append(channels, channel)
+	}
+	service.ResetProxyClientCache()
+
+	results := make([]channelLabCPAImportResult, 0, len(channels))
+	for _, channel := range channels {
+		clientID, _ := channel.GetOtherInfo()["client_id"].(string)
+		results = append(results, channelLabCPAImportResult{
+			ClientID:        clientID,
+			ID:              channel.Id,
+			Name:            channel.Name,
+			BaseURL:         channel.GetBaseURL(),
+			AvailableModels: channel.GetModels(),
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": fmt.Sprintf("已导入 %d 个 CPA 渠道", len(channels)),
+		"data": gin.H{
+			"items": results,
+			"total": len(results),
+		},
+	})
+}
+
 func runChannelLabTest(req channelLabRequest, modelName string) channelLabTestResponse {
 	started := time.Now()
 	channel := buildChannelLabTemporaryChannel(req, modelName)
@@ -155,6 +226,96 @@ func buildChannelLabTemporaryChannel(req channelLabRequest, modelName string) *m
 	}
 	channel.SetSetting(dto.ChannelSettings{Proxy: strings.TrimSpace(req.Proxy), SkipTLSVerify: req.SkipTLSVerify})
 	return channel
+}
+
+func buildChannelLabCPAChannel(item channelLabCPAImportItem) (*model.Channel, error) {
+	baseURL := strings.TrimSpace(item.BaseURL)
+	if baseURL == "" {
+		return nil, fmt.Errorf("Base URL 不能为空")
+	}
+	key := normalizeChannelLabCSVKey(item.Key)
+	if key == "" {
+		return nil, fmt.Errorf("%s 的 API Key 不能为空", baseURL)
+	}
+	models := normalizeChannelLabModels(item.AvailableModels)
+	if len(models) == 0 {
+		return nil, fmt.Errorf("%s 没有可导入的可用模型", baseURL)
+	}
+
+	channelType := item.Type
+	if channelType <= 0 || channelType >= constant.ChannelTypeDummy {
+		channelType = constant.ChannelTypeOpenAI
+	}
+	autoBan := 1
+	priority := int64(0)
+	tag := "CPA"
+	remark := "渠道测试场 CSV 自动导入"
+	modelEndpointTypes := map[string]string{}
+	for modelName, endpointType := range item.ModelEndpointTypes {
+		modelName = strings.TrimSpace(modelName)
+		endpointType = strings.TrimSpace(endpointType)
+		if modelName != "" && endpointType != "" {
+			modelEndpointTypes[modelName] = endpointType
+		}
+	}
+
+	channel := &model.Channel{
+		Type:          channelType,
+		Key:           key,
+		Name:          buildChannelLabCPAChannelName(models),
+		Status:        common.ChannelStatusEnabled,
+		BaseURL:       &baseURL,
+		Models:        strings.Join(models, ","),
+		Group:         "default",
+		CreatedTime:   common.GetTimestamp(),
+		AutoBan:       &autoBan,
+		Priority:      &priority,
+		Tag:           &tag,
+		Remark:        &remark,
+		OtherSettings: "{}",
+	}
+	channel.SetSetting(dto.ChannelSettings{Proxy: strings.TrimSpace(item.Proxy), SkipTLSVerify: item.SkipTLSVerify})
+	channel.SetOtherSettings(dto.ChannelOtherSettings{})
+	channel.OtherSettings = `{"profit_upstream_usd_per_cny":100}`
+	channel.SetOtherInfo(map[string]interface{}{
+		"source":               "channel_lab_csv_import",
+		"client_id":            strings.TrimSpace(item.ClientID),
+		"model_endpoint_types": modelEndpointTypes,
+	})
+	if err := validateChannel(channel, true); err != nil {
+		return nil, err
+	}
+	return channel, nil
+}
+
+func buildChannelLabCPAChannelName(models []string) string {
+	hasGPT := false
+	hasClaude := false
+	for _, modelName := range models {
+		lower := strings.ToLower(modelName)
+		if strings.Contains(lower, "gpt") {
+			hasGPT = true
+		}
+		if strings.Contains(lower, "claude") || strings.Contains(lower, "opus") || strings.Contains(lower, "sonnet") {
+			hasClaude = true
+		}
+	}
+	suffix := "MODEL"
+	if hasGPT && hasClaude {
+		suffix = "GPTCLAUDE"
+	} else if hasGPT {
+		suffix = "GPT"
+	} else if hasClaude {
+		suffix = "CLAUDE"
+	}
+	return fmt.Sprintf("auto-%s-%s", strings.ToLower(common.GetRandomString(6)), suffix)
+}
+
+func normalizeChannelLabCSVKey(key string) string {
+	key = strings.TrimSpace(key)
+	key = strings.Split(key, "\n")[0]
+	key = strings.TrimSpace(key)
+	return strings.TrimPrefix(key, "sk-")
 }
 
 func channelLabEndpointCandidates(req channelLabRequest, modelName string) []string {

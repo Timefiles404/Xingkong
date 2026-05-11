@@ -316,6 +316,7 @@ func SetApiRouter(router *gin.Engine) {
 			channelLabRoute.POST("/fetch_models", controller.FetchModels)
 			channelLabRoute.POST("/test", controller.ChannelLabTest)
 			channelLabRoute.POST("/test_all", controller.ChannelLabTestAll)
+			channelLabRoute.POST("/import_cpa", controller.ChannelLabImportCPAChannels)
 		}
 		tokenRoute := apiRouter.Group("/token")
 		tokenRoute.Use(middleware.UserAuth())
