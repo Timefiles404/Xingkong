@@ -36,3 +36,12 @@ func TestFieldMatchRequiresAllCanonicalTokens(t *testing.T) {
 		t.Fatal("separated version tokens should match")
 	}
 }
+
+func TestExactMatchDoesNotMatchReorderedFields(t *testing.T) {
+	if scoreCanonicalUpstreamMatch("claude-4-6-sonnet", NameRuleExact, "claude-sonnet-4-6") > 0 {
+		t.Fatal("exact rule should not match reordered field tokens")
+	}
+	if scoreCanonicalUpstreamMatch("claude-sonnet-4-6", NameRuleExact, "claude-sonnet-4-6") == 0 {
+		t.Fatal("exact rule should match the same normalized model name")
+	}
+}

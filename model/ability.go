@@ -293,7 +293,7 @@ func UpdateAbilityByTag(tag string, newTag *string, priority *int64, weight *uin
 
 var fixLock = sync.Mutex{}
 
-const modelClusterAbilityVersion = "20260504-field-match-v1"
+const modelClusterAbilityVersion = "20260511-field-match-exact-v2"
 
 func EnsureClusteredAbilities() error {
 	var option Option
@@ -306,6 +306,14 @@ func EnsureClusteredAbilities() error {
 		return err
 	}
 	return UpdateOption("ModelClusterAbilityVersion", modelClusterAbilityVersion)
+}
+
+func RebuildModelRoutingCaches(reason string) error {
+	if strings.TrimSpace(reason) != "" {
+		common.SysLog("rebuilding channel abilities for clustered model routing: " + reason)
+	}
+	_, _, err := FixAbility()
+	return err
 }
 
 func FixAbility() (int, int, error) {

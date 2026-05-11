@@ -125,6 +125,10 @@ func UpdateModelMeta(c *gin.Context) {
 			common.ApiError(c, err)
 			return
 		}
+		if err := model.RebuildModelRoutingCaches("model status updated"); err != nil {
+			common.ApiError(c, err)
+			return
+		}
 	} else {
 		// 名称冲突检查
 		if dup, err := model.IsModelNameDuplicated(m.Id, m.ModelName); err != nil {
@@ -153,6 +157,10 @@ func DeleteModelMeta(c *gin.Context) {
 		return
 	}
 	if err := model.DB.Delete(&model.Model{}, id).Error; err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if err := model.RebuildModelRoutingCaches("model deleted"); err != nil {
 		common.ApiError(c, err)
 		return
 	}

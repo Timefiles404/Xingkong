@@ -450,6 +450,13 @@ func SyncUpstreamModels(c *gin.Context) {
 		}
 	}
 
+	if createdModels > 0 || updatedModels > 0 {
+		if err := model.RebuildModelRoutingCaches("model sync changed catalog"); err != nil {
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": "模型同步完成但重建模型路由失败: " + err.Error()})
+			return
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{

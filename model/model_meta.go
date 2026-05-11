@@ -65,10 +65,13 @@ func (mi *Model) Insert() error {
 	}
 
 	// 使用保存的原始值进行更新，确保零值能正确保存
-	return DB.Model(&Model{}).Where("id = ?", mi.Id).Updates(map[string]interface{}{
+	if err := DB.Model(&Model{}).Where("id = ?", mi.Id).Updates(map[string]interface{}{
 		"status":        originalStatus,
 		"sync_official": originalSyncOfficial,
-	}).Error
+	}).Error; err != nil {
+		return err
+	}
+	return RebuildModelRoutingCaches("model inserted")
 }
 
 func IsModelNameDuplicated(id int, name string) (bool, error) {
@@ -83,13 +86,19 @@ func IsModelNameDuplicated(id int, name string) (bool, error) {
 func (mi *Model) Update() error {
 	mi.UpdatedTime = common.GetTimestamp()
 	// 使用 Select 强制更新所有字段，包括零值
-	return DB.Model(&Model{}).Where("id = ?", mi.Id).
+	if err := DB.Model(&Model{}).Where("id = ?", mi.Id).
 		Select("model_name", "description", "icon", "tags", "vendor_id", "endpoints", "admin_meta", "status", "sync_official", "name_rule", "updated_time").
-		Updates(mi).Error
+		Updates(mi).Error; err != nil {
+		return err
+	}
+	return RebuildModelRoutingCaches("model updated")
 }
 
 func (mi *Model) Delete() error {
-	return DB.Delete(mi).Error
+	if err := DB.Delete(mi).Error; err != nil {
+		return err
+	}
+	return RebuildModelRoutingCaches("model deleted")
 }
 
 func GetVendorModelCounts() (map[int64]int64, error) {
@@ -262,6 +271,8 @@ func scoreCanonicalUpstreamMatch(canonical string, rule int, upstream string) in
 	}
 
 	switch rule {
+	case NameRuleExact:
+		return 0
 	case NameRulePrefix:
 		if strings.HasPrefix(upstreamNorm, canonicalNorm) {
 			return 70000 + len(canonicalNorm)
@@ -278,18 +289,17 @@ func scoreCanonicalUpstreamMatch(canonical string, rule int, upstream string) in
 		// handled below with a higher score than implicit token matching.
 	}
 
-	canonicalTokens := modelMatchTokens(canonical)
-	upstreamTokens := modelMatchTokens(upstream)
-	if allTokensPresent(canonicalTokens, upstreamTokens) {
-		base := 50000
-		if rule == NameRuleFieldMatch {
-			base = 80000
+	if rule == NameRuleFieldMatch {
+		canonicalTokens := modelMatchTokens(canonical)
+		upstreamTokens := modelMatchTokens(upstream)
+		if !allTokensPresent(canonicalTokens, upstreamTokens) {
+			return 0
 		}
 		extraTokens := len(upstreamTokens) - len(canonicalTokens)
 		if extraTokens < 0 {
 			extraTokens = 0
 		}
-		return base + len(canonicalTokens)*100 - extraTokens
+		return 80000 + len(canonicalTokens)*100 - extraTokens
 	}
 	return 0
 }
