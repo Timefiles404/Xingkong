@@ -64,6 +64,10 @@ func handleCPAChannelCooldown(channelError types.ChannelError, modelName string,
 		disableCPAChannelFor24h(channel, "CPA 标签渠道账号被上游标记为 deactivated", err)
 		return true
 	}
+	if shouldCooldownCPAChannelForConnectionTimeout(err) {
+		disableCPAChannelFor24h(channel, "CPA 标签渠道连接上游超时", err)
+		return true
+	}
 	if shouldCooldownCPAModelForAuthUnavailable(err) {
 		return disableCPAModelFor24h(channel, modelName, err)
 	}
@@ -296,6 +300,16 @@ func shouldCooldownCPAChannelForDeactivatedAccount(err *types.NewAPIError) bool 
 	message := strings.ToLower(err.Error())
 	return strings.Contains(message, "openai account has been deactivated") ||
 		strings.Contains(message, "account has been deactivated")
+}
+
+func shouldCooldownCPAChannelForConnectionTimeout(err *types.NewAPIError) bool {
+	if err == nil || err.StatusCode != http.StatusInternalServerError {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "dial tcp") &&
+		(strings.Contains(message, "connect: connection timed out") ||
+			strings.Contains(message, "i/o timeout"))
 }
 
 func extractModelFromErrorMessage(message string) string {
