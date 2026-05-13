@@ -32,9 +32,9 @@ export async function searchUsers(
   params: SearchUsersParams
 ): Promise<GetUsersResponse> {
   const { keyword = '', group = '', p = 1, page_size = 10 } = params
-  const res = await api.get(
-    `/api/user/search?keyword=${keyword}&group=${group}&p=${p}&page_size=${page_size}`
-  )
+  const res = await api.get('/api/user/search', {
+    params: { keyword, group, p, page_size },
+  })
   return res.data
 }
 

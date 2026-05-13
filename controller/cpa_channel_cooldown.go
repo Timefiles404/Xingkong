@@ -17,14 +17,15 @@ import (
 )
 
 const (
-	cpaCooldownTag        = "cpa"
-	cpaCooldownSeconds    = int64(24 * 60 * 60)
-	cpaCooldownCheckEvery = 5 * time.Minute
-	cpaCooldownUntilKey   = "cpa_cooldown_until"
-	cpaCooldownReasonKey  = "cpa_cooldown_reason"
-	cpaLastProbeKey       = "cpa_last_probe"
-	cpaLastProbeErrorKey  = "cpa_last_probe_error"
-	cpaModelCooldownsKey  = "cpa_model_cooldowns"
+	cpaCooldownTag         = "cpa"
+	cpaCooldownSeconds     = int64(24 * 60 * 60)
+	cpaCooldownCheckEvery  = 5 * time.Minute
+	cpaCooldownUntilKey    = "cpa_cooldown_until"
+	cpaCooldownReasonKey   = "cpa_cooldown_reason"
+	cpaLastProbeKey        = "cpa_last_probe"
+	cpaLastProbeErrorKey   = "cpa_last_probe_error"
+	cpaModelCooldownsKey   = "cpa_model_cooldowns"
+	cpaCooldownDurationKey = "cpa_cooldown_duration_seconds"
 )
 
 var cpaCooldownTaskOnce sync.Once
@@ -68,6 +69,10 @@ func handleCPAChannelCooldown(channelError types.ChannelError, modelName string,
 		disableCPAChannelFor24h(channel, "CPA 标签渠道连接上游超时", err)
 		return true
 	}
+	if shouldCooldownCPAChannelForEmptyStream(err) {
+		disableCPAChannelForDuration(channel, "CPA 标签渠道上游流在首包前关闭", err, 60*60)
+		return true
+	}
 	if shouldCooldownCPAModelForAuthUnavailable(err) {
 		return disableCPAModelFor24h(channel, modelName, err)
 	}
@@ -75,12 +80,21 @@ func handleCPAChannelCooldown(channelError types.ChannelError, modelName string,
 }
 
 func disableCPAChannelFor24h(channel *model.Channel, prefix string, err *types.NewAPIError) {
-	until := common.GetTimestamp() + cpaCooldownSeconds
-	reason := fmt.Sprintf("%s，自动冷却 24h：%s", prefix, err.ErrorWithStatusCode())
+	disableCPAChannelForDuration(channel, prefix, err, cpaCooldownSeconds)
+}
+
+func disableCPAChannelForDuration(channel *model.Channel, prefix string, err *types.NewAPIError, durationSeconds int64) {
+	if durationSeconds <= 0 {
+		durationSeconds = cpaCooldownSeconds
+	}
+	until := common.GetTimestamp() + durationSeconds
+	label := formatCooldownDuration(durationSeconds)
+	reason := fmt.Sprintf("%s，自动冷却 %s：%s", prefix, label, err.ErrorWithStatusCode())
 	changed, updateErr := model.ForceUpdateChannelStatus(channel.Id, common.ChannelStatusAutoDisabled, reason, map[string]interface{}{
-		cpaCooldownUntilKey:  until,
-		cpaCooldownReasonKey: reason,
-		cpaLastProbeErrorKey: nil,
+		cpaCooldownUntilKey:    until,
+		cpaCooldownReasonKey:   reason,
+		cpaLastProbeErrorKey:   nil,
+		cpaCooldownDurationKey: durationSeconds,
 	})
 	if updateErr != nil {
 		common.SysLog(fmt.Sprintf("CPA channel cooldown update failed: channel_id=%d, error=%v", channel.Id, updateErr))
@@ -160,10 +174,11 @@ func probeCPAChannel(channel *model.Channel) {
 	result := testChannel(channel, "", "", false)
 	if result.localErr == nil && result.newAPIError == nil {
 		_, err := model.ForceUpdateChannelStatus(channel.Id, common.ChannelStatusEnabled, "CPA 标签渠道冷却后探测成功，自动启用", map[string]interface{}{
-			cpaCooldownUntilKey:  nil,
-			cpaCooldownReasonKey: nil,
-			cpaLastProbeKey:      common.GetTimestamp(),
-			cpaLastProbeErrorKey: nil,
+			cpaCooldownUntilKey:    nil,
+			cpaCooldownReasonKey:   nil,
+			cpaLastProbeKey:        common.GetTimestamp(),
+			cpaLastProbeErrorKey:   nil,
+			cpaCooldownDurationKey: nil,
 		})
 		if err != nil {
 			common.SysLog(fmt.Sprintf("CPA channel #%d enable after probe failed: %v", channel.Id, err))
@@ -184,13 +199,18 @@ func probeCPAChannel(channel *model.Channel) {
 	} else if result.localErr != nil {
 		message = result.localErr.Error()
 	}
-	nextUntil := common.GetTimestamp() + cpaCooldownSeconds
-	reason := fmt.Sprintf("CPA 标签渠道冷却后探测失败，继续冷却 24h：%s", message)
+	durationSeconds := cpaCooldownSeconds
+	if duration, ok := numberInfo(channel.GetOtherInfo()[cpaCooldownDurationKey]); ok && duration > 0 {
+		durationSeconds = duration
+	}
+	nextUntil := common.GetTimestamp() + durationSeconds
+	reason := fmt.Sprintf("CPA 标签渠道冷却后探测失败，继续冷却 %s：%s", formatCooldownDuration(durationSeconds), message)
 	_, err := model.ForceUpdateChannelStatus(channel.Id, common.ChannelStatusAutoDisabled, reason, map[string]interface{}{
-		cpaCooldownUntilKey:  nextUntil,
-		cpaCooldownReasonKey: reason,
-		cpaLastProbeKey:      common.GetTimestamp(),
-		cpaLastProbeErrorKey: message,
+		cpaCooldownUntilKey:    nextUntil,
+		cpaCooldownReasonKey:   reason,
+		cpaLastProbeKey:        common.GetTimestamp(),
+		cpaLastProbeErrorKey:   message,
+		cpaCooldownDurationKey: durationSeconds,
 	})
 	if err != nil {
 		common.SysLog(fmt.Sprintf("CPA channel #%d extend cooldown failed: %v", channel.Id, err))
@@ -310,6 +330,28 @@ func shouldCooldownCPAChannelForConnectionTimeout(err *types.NewAPIError) bool {
 	return strings.Contains(message, "dial tcp") &&
 		(strings.Contains(message, "connect: connection timed out") ||
 			strings.Contains(message, "i/o timeout"))
+}
+
+func shouldCooldownCPAChannelForEmptyStream(err *types.NewAPIError) bool {
+	if err == nil || err.StatusCode != http.StatusInternalServerError {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "empty_stream") &&
+		strings.Contains(message, "upstream stream closed before first payload")
+}
+
+func formatCooldownDuration(seconds int64) string {
+	switch {
+	case seconds > 0 && seconds%86400 == 0:
+		return fmt.Sprintf("%dd", seconds/86400)
+	case seconds > 0 && seconds%3600 == 0:
+		return fmt.Sprintf("%dh", seconds/3600)
+	case seconds > 0 && seconds%60 == 0:
+		return fmt.Sprintf("%dm", seconds/60)
+	default:
+		return fmt.Sprintf("%ds", seconds)
+	}
 }
 
 func extractModelFromErrorMessage(message string) string {

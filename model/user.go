@@ -228,6 +228,8 @@ func SearchUsers(keyword string, group string, startIdx int, num int) ([]*User, 
 	var users []*User
 	var total int64
 	var err error
+	keyword = strings.TrimSpace(keyword)
+	group = strings.TrimSpace(group)
 
 	// 开始事务
 	tx := DB.Begin()
@@ -243,8 +245,9 @@ func SearchUsers(keyword string, group string, startIdx int, num int) ([]*User, 
 	// 构建基础查询
 	query := tx.Unscoped().Model(&User{})
 
-	// 构建搜索条件
-	likeCondition := "username LIKE ? OR email LIKE ? OR display_name LIKE ?"
+	// 构建搜索条件。使用 LOWER 兼容 PostgreSQL 大小写敏感 LIKE，确保注册邮箱可稳定检索。
+	likeCondition := "LOWER(username) LIKE ? OR LOWER(email) LIKE ? OR LOWER(display_name) LIKE ?"
+	keywordPattern := "%" + strings.ToLower(keyword) + "%"
 
 	// 尝试将关键字转换为整数ID
 	keywordInt, err := strconv.Atoi(keyword)
@@ -253,19 +256,19 @@ func SearchUsers(keyword string, group string, startIdx int, num int) ([]*User, 
 		likeCondition = "id = ? OR " + likeCondition
 		if group != "" {
 			query = query.Where("("+likeCondition+") AND "+commonGroupCol+" = ?",
-				keywordInt, "%"+keyword+"%", "%"+keyword+"%", "%"+keyword+"%", group)
+				keywordInt, keywordPattern, keywordPattern, keywordPattern, group)
 		} else {
 			query = query.Where(likeCondition,
-				keywordInt, "%"+keyword+"%", "%"+keyword+"%", "%"+keyword+"%")
+				keywordInt, keywordPattern, keywordPattern, keywordPattern)
 		}
 	} else {
 		// 非数字关键字，只搜索字符串字段
 		if group != "" {
 			query = query.Where("("+likeCondition+") AND "+commonGroupCol+" = ?",
-				"%"+keyword+"%", "%"+keyword+"%", "%"+keyword+"%", group)
+				keywordPattern, keywordPattern, keywordPattern, group)
 		} else {
 			query = query.Where(likeCondition,
-				"%"+keyword+"%", "%"+keyword+"%", "%"+keyword+"%")
+				keywordPattern, keywordPattern, keywordPattern)
 		}
 	}
 
